@@ -3,3 +3,8 @@ data/
 .env
 *.log
 .DS_Store
+bin/cloudflared
+cloudflare/tunnel-url.txt
+cloudflare/tunnel.log
+cloudflare/tunnel.pid
+cloudflare/*.json

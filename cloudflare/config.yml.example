@@ -1,0 +1,16 @@
+# Túnel fixo (produção) — use depois de criar o túnel no painel Cloudflare Zero Trust.
+# Copie para ~/.cloudflared/config.yml e ajuste o UUID e hostname.
+#
+# 1) https://one.dash.cloudflare.com → Networks → Tunnels → Create tunnel
+# 2) Instale o conector com o token OU faça login: cloudflared tunnel login
+# 3) cloudflared tunnel create spotstrat-api
+# 4) Public Hostname: api.spotstrat.com → http://127.0.0.1:7171
+# 5) No DNS da Cloudflare (spotstrat.com): CNAME api → <tunnel-id>.cfargotunnel.com
+#
+# tunnel: <UUID-do-tunel>
+# credentials-file: /home/SEU_USUARIO/.cloudflared/<UUID>.json
+#
+# ingress:
+#   - hostname: api.spotstrat.com
+#     service: http://127.0.0.1:7171
+#   - service: http_status:404
