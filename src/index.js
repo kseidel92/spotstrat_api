@@ -77,7 +77,7 @@ async function main() {
     });
   });
 
-  const port = Number(process.env.PORT || 4000);
+  const port = Number(process.env.PORT || 7171);
   server.on('error', (err) => {
     console.error(err);
     process.exit(1);

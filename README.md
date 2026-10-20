@@ -16,14 +16,14 @@ npm install
 npm start
 ```
 
-API em `http://127.0.0.1:4000`.
+API em `http://127.0.0.1:7171` (porta aberta no seu notebook).
 
 ## Expor para a Vercel (túnel)
 
-Na sua máquina, deixe a API ouvindo em `4000` e publique com Cloudflare Tunnel, ngrok ou similar. Exemplo Cloudflare:
+Na sua máquina, deixe a API ouvindo em **`7171`** e publique com Cloudflare Tunnel, ngrok ou encaminhe a porta **7171** que você já abriu no roteador. Exemplo Cloudflare:
 
 ```bash
-cloudflared tunnel --url http://127.0.0.1:4000
+cloudflared tunnel --url http://127.0.0.1:7171
 ```
 
 Copie a URL HTTPS gerada para `HOME_API_URL` no projeto **spotstrat_cloud** na Vercel.
@@ -38,4 +38,4 @@ Copie a URL HTTPS gerada para `HOME_API_URL` no projeto **spotstrat_cloud** na V
 | `LAB_ROOT` | Caminho absoluto para os dados de backtest |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Geração de estratégias |
 
-WebSocket ao vivo: `ws://127.0.0.1:4000/v1/stream` (no site público use o mesmo host do túnel com `wss://`).
+WebSocket ao vivo: `ws://127.0.0.1:7171/v1/stream` (no site público use o mesmo host do túnel com `wss://`).
