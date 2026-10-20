@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { Worker } = require('worker_threads');
 const { pool } = require('./db');
 const { specFromRecipe } = require('./fit');
+const { completeLabChat, detectKind, baseRecipe } = require('./llm');
 
 const ROOT = process.env.LAB_ROOT || path.join(__dirname, '..', '..', 'projeto_existente', 'data', 'backtest');
 const KLINES = path.join(ROOT, 'klines');
@@ -174,43 +175,120 @@ function manifestPublic() {
   };
 }
 
-async function answerQuery({ prompt, userId }) {
+function relatedArtifacts(prompt) {
+  const text = String(prompt || '').toLowerCase();
+  const words = text.split(/\s+/).filter((w) => w.length > 3);
+  const scored = artifacts.map((a) => {
+    const blob = `${a.name} ${a.summary}`.toLowerCase();
+    let score = 0;
+    for (const w of words) if (blob.includes(w)) score += 1;
+    if (/explos|spike|press|momentum|sub/i.test(text) && /spike|anom|vol/i.test(blob)) score += 3;
+    if (/toque|caixa/i.test(text) && /toque/i.test(blob)) score += 3;
+    if (/queda|dump/i.test(text) && /queda|dump/i.test(blob)) score += 3;
+    return { a, score };
+  }).filter((row) => row.score > 0).sort((x, y) => y.score - x.score).slice(0, 6);
+  return (scored.length ? scored.map((r) => r.a) : artifacts.slice(0, 6))
+    .map(({ id, name, summary, top }) => ({ id, name, summary, top }));
+}
+
+function buildLabContext(prompt) {
+  const bits = [manifestPublic()];
+  const related = relatedArtifacts(prompt);
+  if (related.length) bits.push({ savedSweeps: related });
+  const symbol = (String(prompt).toUpperCase().match(/[A-Z]{2,12}USDT/) || [])[0];
+  const row = symbol && symbolIndex.find((s) => s.symbol === symbol);
+  if (row) {
+    bits.push({
+      symbol: row.symbol,
+      changePct18m: Number(row.changePct.toFixed(2)),
+      note: 'Variação first→last close no arquivo 1m; não é PnL de estratégia.',
+    });
+  }
+  const kind = detectKind(prompt);
+  if (kind) {
+    const base = baseRecipe(kind);
+    bits.push({ heuristicPreset: { kind, name: base.name, thesis: base.thesis, stopPct: base.stopPct, tpPct: base.tpPct } });
+  }
+  return JSON.stringify(bits).slice(0, 6000);
+}
+
+function localLabReply(prompt, locale) {
+  const pt = /^pt/i.test(locale || '');
+  const kind = detectKind(prompt) || 'spike';
+  const base = baseRecipe(kind);
+  if (pt) {
+    return [
+      `Sobre **${base.name}** (leitura rápida, sem backtest novo agora):`,
+      '',
+      `**Ideia:** ${base.thesis}`,
+      '',
+      '**Pontos fortes:** captura movimentos com pressão compradora; combina bem com filtro de maré e confirmação em timeframe menor; stop percentual deixa o R:R líquido mensurável no paper.',
+      '',
+      '**Pontos fracos:** muitos falsos rompimentos em altcoins finas; explosão sem volume sustentado reverte rápido; taxa 0,075% e halt de 8% no dia comem sequências; o arquivo de 18 meses não tem livro/tape — valide no simulador ao vivo.',
+      '',
+      '**Como eu aprimoraria:** exigir fechamento de vela no TF maior + 2–3 velas verdes no 1m; filtrar maré BOA ou neutra; tape/livro comprador no ao vivo; stop abaixo do último swing; alvo parcial ou trailing após +1R.',
+      '',
+      'Para **criar no simulador**, use Estratégias → Montar em passos e descreva o gatilho (ex.: spike 15m + confirmação 1m).',
+    ].join('\n');
+  }
+  return [
+    `Quick take on **${base.name}** (no fresh sweep run):`,
+    '',
+    `**Idea:** ${base.thesis}`,
+    '',
+    '**Pros:** catches momentum bursts; works with tide filters and lower-TF confirmation; percent stop keeps net R:R visible in paper.',
+    '',
+    '**Cons:** false breakouts on thin alts; fee + 8% Brasília-day halt; 18-month file is candles only — validate book/tape live.',
+    '',
+    '**Improvements:** HTF close + 1m confirmation; good/neutral tide; live tape/OBI; stop under last swing; partial or trail after +1R.',
+    '',
+    'To **run in the simulator**, use Strategies → Build in steps.',
+  ].join('\n');
+}
+
+async function answerQuery({ prompt, userId, history, locale }) {
   const text = String(prompt || '').trim();
-  if (text.length < 3) {
+  if (text.length < 2) {
     const err = new Error('pergunta curta');
     err.status = 400;
     throw err;
   }
-  const hash = crypto.createHash('sha256').update(JSON.stringify({
-    kind: 'prompt_stat',
-    prompt: text.toLowerCase(),
-    generation: manifest?.downloadedAt || 'local',
-  })).digest('hex');
-  const existing = await pool.query('SELECT * FROM research_artifacts WHERE hash = $1', [hash]);
-  if (existing.rows[0]) {
-    await pool.query('UPDATE research_artifacts SET n_hits = n_hits + 1 WHERE id = $1', [existing.rows[0].id]);
-    return { cached: true, artifact: existing.rows[0] };
+  const prior = (Array.isArray(history) ? history : [])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
+    .slice(-14)
+    .map((m) => ({ role: m.role, content: String(m.content).trim() }));
+  const messages = [...prior, { role: 'user', content: text }];
+  const labContext = buildLabContext(text);
+  let reply = '';
+  let provider = 'local';
+  try {
+    const out = await completeLabChat({ messages, locale: locale || 'pt-BR', labContext });
+    reply = out.reply || '';
+    provider = out.provider || 'local';
+  } catch (err) {
+    console.error('[lab]', err.message);
   }
-  const symbol = (text.toUpperCase().match(/[A-Z]{2,12}USDT/) || [])[0];
-  const row = symbol ? symbolIndex.find((s) => s.symbol === symbol) : null;
-  const related = artifacts.filter((a) => {
-    const blob = `${a.name} ${a.summary}`.toLowerCase();
-    return /toque|oscila|queda|sweep/.test(text.toLowerCase()) && blob.includes(text.toLowerCase().split(/\s+/)[0]);
-  }).slice(0, 5);
+  if (!reply) reply = localLabReply(text, locale);
   const payload = {
     prompt: text,
-    symbol: row || null,
-    note: row
-      ? 'Variação do primeiro ao último close do arquivo de 1 minuto. Não é um backtest de estratégia e não inclui livro.'
-      : 'Não rodei varredura nova no processo do desk. Abaixo, o que já está salvo no laboratório.',
-    artifacts: related.length ? related : artifacts.slice(0, 8).map(({ id, name, summary, top }) => ({ id, name, summary, top })),
+    reply,
+    provider,
+    refs: relatedArtifacts(text),
   };
-  const inserted = await pool.query(
-    `INSERT INTO research_artifacts (hash, kind, params, payload, created_by)
-     VALUES ($1, 'prompt_stat', $2::jsonb, $3::jsonb, $4) RETURNING *`,
-    [hash, JSON.stringify({ prompt: text }), JSON.stringify(payload), userId],
-  );
-  return { cached: false, artifact: inserted.rows[0] };
+  const hash = crypto.createHash('sha256').update(JSON.stringify({ kind: 'lab_chat_v3', prompt: text, n: prior.length })).digest('hex');
+  try {
+    const inserted = await pool.query(
+      `INSERT INTO research_artifacts (hash, kind, params, payload, created_by)
+       VALUES ($1, 'lab_chat', $2::jsonb, $3::jsonb, $4) RETURNING *`,
+      [hash, JSON.stringify({ prompt: text }), JSON.stringify(payload), userId],
+    );
+    return { cached: false, artifact: inserted.rows[0] };
+  } catch (err) {
+    if (err.code === '23505') {
+      await pool.query('UPDATE research_artifacts SET n_hits = n_hits + 1, payload = $2::jsonb WHERE hash = $1', [hash, JSON.stringify(payload)]);
+    }
+    return { cached: false, artifact: { payload } };
+  }
 }
 
 function contextForPrompt(prompt) {

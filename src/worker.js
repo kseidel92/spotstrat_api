@@ -254,8 +254,22 @@ async function runJob(job) {
   const input = job.input || {};
   await pool.query(`UPDATE prompts SET status = 'running' WHERE job_id = $1 AND status = 'queued'`, [job.id]);
   if (job.kind === 'lab') {
-    const result = await lab.answerQuery({ prompt: input.prompt, userId: job.user_id });
-    await finish(job, { status: 'done', output: { artifactId: result.artifact.id, cached: result.cached, payload: result.artifact.payload } });
+    const result = await lab.answerQuery({
+      prompt: input.prompt,
+      userId: job.user_id,
+      history: input.history,
+      locale: input.locale,
+    });
+    const payload = result.artifact.payload || result.artifact;
+    await finish(job, {
+      status: 'done',
+      output: {
+        artifactId: result.artifact.id,
+        cached: result.cached,
+        payload,
+        reply: payload.reply,
+      },
+    });
     return;
   }
   const { rows: messages } = await pool.query(
@@ -353,7 +367,10 @@ async function loop() {
   } catch (err) {
     console.error('[worker]', err.message);
     const human = 'Não fechei a receita agora. Manda o gatilho de novo em uma frase.';
-    if (job.kind !== 'lab' && job.thread_id) {
+    if (job.kind === 'lab') {
+      const sorry = 'Não consegui responder agora. Tenta de novo em instantes.';
+      await finish(job, { status: 'failed', error: sorry, output: { reply: sorry }, detail: err.message });
+    } else if (job.thread_id) {
       await say(job.thread_id, human, null).catch(() => {});
       await finish(job, { status: 'needs_user', output: { ask: human }, detail: human });
     } else {

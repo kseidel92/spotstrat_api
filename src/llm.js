@@ -407,4 +407,86 @@ async function completeRecipe({ messages, locale, current, labContext }) {
   };
 }
 
-module.exports = { completeRecipe, mockComplete, settle, parseModelJson, CATALOG };
+function labSystemPrompt(locale, labContext) {
+  const lang = /^pt/i.test(locale || '') ? 'português do Brasil'
+    : /^es/i.test(locale || '') ? 'español'
+      : /^fr/i.test(locale || '') ? 'français'
+        : /^de/i.test(locale || '') ? 'Deutsch'
+          : /^ja/i.test(locale || '') ? '日本語'
+            : 'English';
+  return [
+    `Você é o assistente do Laboratório SpotStrat: conversa sobre ideias de estratégia spot LONG (paper), Binance, simulador ao vivo.`,
+    `Responda em ${lang}, tom claro e direto (pode usar títulos curtos e listas).`,
+    'Não crie código function strategy(ctx) aqui. Se pedirem para rodar no simulador, oriente a usar a aba Estratégias → Montar em passos.',
+    'Não invente números de backtest que não estejam no contexto. Diferencie o arquivo de 18 meses (só vela 1m) do ao vivo (livro e tape).',
+    'Para pedidos de prós/contras e aprimoramento: seja específico (falsos rompimentos, taxa, halt diário, maré, liquidez, multi-timeframe).',
+    labContext ? `Contexto do laboratório:\n${labContext}` : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+async function callOpenAIText({ system, messages }) {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secret('OPENAI_API_KEY')}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0.35,
+      max_tokens: 2500,
+      messages: [
+        { role: 'system', content: system },
+        ...messages.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+      ],
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(body.error?.message || `OpenAI HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return String(body.choices?.[0]?.message?.content || '').trim();
+}
+
+async function callAnthropicText({ system, messages }) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': secret('ANTHROPIC_API_KEY'),
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5',
+      max_tokens: 2500,
+      system,
+      messages: messages.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error?.message || `Anthropic HTTP ${res.status}`);
+  return (body.content || []).map((c) => c.text || '').join('').trim();
+}
+
+async function completeLabChat({ messages, locale, labContext }) {
+  const system = labSystemPrompt(locale, labContext);
+  const trimmed = messages.slice(-16);
+  const openai = secret('OPENAI_API_KEY');
+  const anthropic = secret('ANTHROPIC_API_KEY');
+  if (anthropic) {
+    try {
+      return { reply: await callAnthropicText({ system, messages: trimmed }), provider: 'anthropic' };
+    } catch (err) {
+      console.error('[lab-llm]', err.message);
+      if (!openai) throw err;
+    }
+  }
+  if (openai) {
+    return { reply: await callOpenAIText({ system, messages: trimmed }), provider: 'openai' };
+  }
+  return { reply: '', provider: 'none' };
+}
+
+module.exports = { completeRecipe, completeLabChat, mockComplete, settle, parseModelJson, CATALOG, detectKind, baseRecipe };

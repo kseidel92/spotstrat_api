@@ -833,9 +833,12 @@ function createHttp(desk) {
       if (prompt) await savePrompt(req, { prompt, mode: 'lab', status: 'rejected', detail: 'Escreve o pedido.' });
       return res.status(400).json({ error: 'invalid_body', message: 'Escreve o pedido.' });
     }
+    const history = Array.isArray(req.body.history)
+      ? req.body.history.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim()).slice(-14)
+      : [];
     const { rows } = await pool.query(
       `INSERT INTO jobs (user_id, kind, status, input) VALUES ($1, 'lab', 'queued', $2::jsonb) RETURNING id, status`,
-      [req.user.id, JSON.stringify({ prompt })],
+      [req.user.id, JSON.stringify({ prompt, history, locale: req.profile?.locale || req.user?.locale || 'pt-BR' })],
     );
     await savePrompt(req, { prompt, mode: 'lab', status: 'queued', jobId: rows[0].id });
     res.status(202).json({ jobId: rows[0].id, status: rows[0].status });
