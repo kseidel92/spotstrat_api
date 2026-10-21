@@ -289,8 +289,17 @@ function createHttp(desk) {
     const idToken = String(req.body.idToken || '');
     if (!aud) return res.status(503).json({ error: 'google_off', message: 'Falta o GOOGLE_CLIENT_ID no .env.' });
     if (!idToken) return res.status(400).json({ error: 'invalid_body', message: 'Entre pelo botão do Google.' });
-    const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
-    const data = await info.json();
+    let info;
+    try {
+      info = await fetch('https://oauth2.googleapis.com/tokeninfo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ id_token: idToken }),
+      });
+    } catch {
+      return res.status(502).json({ error: 'upstream_fail', message: 'Não consegui confirmar o login do Google.' });
+    }
+    const data = await info.json().catch(() => ({}));
     const verified = data.email_verified === true || data.email_verified === 'true';
     if (!info.ok || !verified || data.aud !== aud || !data.sub) {
       return res.status(401).json({ error: 'bad_credentials', message: 'Token do Google recusado.' });
