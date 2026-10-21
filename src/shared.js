@@ -145,6 +145,8 @@ function publicUser(row) {
     accessEndsAt: row.trial_ends_at,
     planStatus: row.plan_status,
     planTier: row.plan_tier || null,
+    cancelRequestedAt: row.cancel_requested_at || null,
+    refundStatus: row.refund_status || 'none',
     daysLeft,
     expiring: open && daysLeft <= 5,
     desk,

@@ -10,7 +10,7 @@ const {
   id, sha256, emptySnap, walletOf, publicUser, deskAllowed, TRIAL_HOURS, LOCALES,
 } = require('./shared');
 const lab = require('./lab');
-const { quotePlan, catalog, productionQuote, settleAccount } = require('./plans');
+const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
 const { notifyOwner } = require('./mail');
 
 const hits = new Map();
@@ -504,6 +504,8 @@ function createHttp(desk) {
         `UPDATE users
          SET plan_tier = $2,
              plan_status = 'active',
+             cancel_requested_at = NULL,
+             refund_status = 'none',
              trial_started_at = COALESCE(trial_started_at, now()),
              trial_ends_at = GREATEST(COALESCE(trial_ends_at, now()), now()) + ($3 || ' months')::interval
          WHERE id = $1
@@ -523,6 +525,76 @@ function createHttp(desk) {
 
   app.post('/v1/billing/simulate', auth, currentUser, simulateCheckout);
   app.post('/v1/billing/checkout', auth, currentUser, simulateCheckout);
+
+  app.post('/v1/billing/cancel', auth, currentUser, async (req, res) => {
+    const row = await loadUser(req.user.id);
+    if (row.refund_status === 'pending') {
+      return res.json({ already: true, user: publicUser(row) });
+    }
+    const ends = row.trial_ends_at ? new Date(row.trial_ends_at).getTime() : 0;
+    if (row.plan_status !== 'active' || !(ends > Date.now())) {
+      return res.status(400).json({ error: 'nothing_to_cancel', message: 'Não há período pago em aberto para cancelar.' });
+    }
+    const { rows: buys } = await pool.query(
+      `SELECT id, amount_brl, months, created_at
+       FROM purchases
+       WHERE user_id = $1 AND status = 'paid'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [req.user.id],
+    );
+    const buy = buys[0];
+    const quote = remainingRefund({
+      paidBrl: buy?.amount_brl,
+      months: buy?.months,
+      purchasedAt: buy?.created_at,
+      accessEndsAt: row.trial_ends_at,
+    });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: updated } = await client.query(
+        `UPDATE users
+         SET cancel_requested_at = now(),
+             refund_status = 'pending',
+             plan_status = 'expired',
+             trial_ends_at = now()
+         WHERE id = $1 AND refund_status IS DISTINCT FROM 'pending'
+         RETURNING *`,
+        [req.user.id],
+      );
+      if (!updated[0]) {
+        await client.query('ROLLBACK');
+        const fresh = await loadUser(req.user.id);
+        return res.json({ already: true, user: publicUser(fresh) });
+      }
+      await client.query(
+        `INSERT INTO cancellation_requests
+          (user_id, email, name, plan_tier, access_ends_at, days_left, purchase_id, paid_brl, months, refund_brl, currency, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'BRL','pending')`,
+        [
+          row.id,
+          row.email,
+          row.name,
+          row.plan_tier,
+          row.trial_ends_at,
+          quote.daysLeft,
+          buy?.id || null,
+          buy ? Number(buy.amount_brl) : null,
+          buy?.months || null,
+          quote.refundBrl,
+        ],
+      );
+      await client.query('COMMIT');
+      await desk.reloadUser(req.user.id);
+      return res.json({ user: publicUser(updated[0]), already: false });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  });
 
   function orderView(row) {
     if (!row) return null;

@@ -109,4 +109,18 @@ async function settleAccount(pool, row) {
   return { row: rows[0], changed: true };
 }
 
-module.exports = { quotePlan, catalog, productionQuote, addBusinessDays, applyWaitBonus, settleAccount, MONTHLY, TERMS, PRODUCTION_BRL };
+function remainingRefund({ paidBrl, months, purchasedAt, accessEndsAt, now = Date.now() }) {
+  const ends = accessEndsAt ? new Date(accessEndsAt).getTime() : 0;
+  const daysLeft = ends > now ? Math.max(1, Math.ceil((ends - now) / 86400000)) : 0;
+  const paid = Number(paidBrl);
+  const termDays = Math.max(1, Math.round((Number(months) || 0) * 30));
+  if (!(paid > 0) || daysLeft <= 0) return { daysLeft, refundBrl: 0 };
+  const start = purchasedAt ? new Date(purchasedAt).getTime() : NaN;
+  const span = Number.isFinite(start) && ends > start ? Math.max(1, Math.ceil((ends - start) / 86400000)) : termDays;
+  const denom = Math.max(1, Math.min(span, termDays));
+  const covered = Math.min(daysLeft, denom);
+  const refundBrl = Math.round(Math.min(paid, (paid * covered) / denom) * 100) / 100;
+  return { daysLeft, refundBrl };
+}
+
+module.exports = { quotePlan, catalog, productionQuote, addBusinessDays, applyWaitBonus, settleAccount, remainingRefund, MONTHLY, TERMS, PRODUCTION_BRL };

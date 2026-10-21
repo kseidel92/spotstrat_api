@@ -129,6 +129,26 @@ CREATE INDEX IF NOT EXISTS alarm_hits_user_idx ON alarm_hits (user_id, created_a
 ALTER TABLE alarms ADD COLUMN IF NOT EXISTS channels jsonb NOT NULL DEFAULT '{"sound":true,"email":false,"sms":false}'::jsonb;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_tier text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS cancel_requested_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS refund_status text NOT NULL DEFAULT 'none';
+
+CREATE TABLE IF NOT EXISTS cancellation_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  email text NOT NULL,
+  name text,
+  plan_tier text,
+  access_ends_at timestamptz,
+  days_left int NOT NULL DEFAULT 0,
+  purchase_id uuid,
+  paid_brl numeric,
+  months int,
+  refund_brl numeric,
+  currency text NOT NULL DEFAULT 'BRL',
+  status text NOT NULL DEFAULT 'pending',
+  requested_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cancellation_requests_status_idx ON cancellation_requests (status, requested_at DESC);
 
 CREATE TABLE IF NOT EXISTS purchases (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
