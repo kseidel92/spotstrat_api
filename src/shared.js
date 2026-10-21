@@ -123,7 +123,7 @@ function publicUser(row) {
   const now = Date.now();
   const accessEnds = row.trial_ends_at ? new Date(row.trial_ends_at).getTime() : null;
   const google = !!row.google_sub;
-  const verified = google ? !!row.email_verified_at : !!(row.email_verified_at && row.phone_verified_at);
+  const verified = !!row.email_verified_at;
   const open = !!(accessEnds && accessEnds > now);
   let desk = 'locked';
   if (!verified) desk = 'unverified';

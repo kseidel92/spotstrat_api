@@ -27,7 +27,7 @@ function createDesk(hub) {
         marePrefs: row.mare_prefs || {},
         planStatus: row.plan_status,
         trialEndsAt: row.trial_ends_at,
-        verified: !!(row.google_sub && row.email_verified_at) || !!(row.email_verified_at && row.phone_verified_at),
+        verified: !!row.email_verified_at,
       });
     }
     const { rows } = await pool.query(`
@@ -73,7 +73,7 @@ function createDesk(hub) {
       marePrefs: row.mare_prefs || {},
       planStatus: row.plan_status,
       trialEndsAt: row.trial_ends_at,
-      verified: !!(row.google_sub && row.email_verified_at) || !!(row.email_verified_at && row.phone_verified_at),
+      verified: !!row.email_verified_at,
     });
     const { rows } = await pool.query(`
       SELECT s.*, p.snapshot

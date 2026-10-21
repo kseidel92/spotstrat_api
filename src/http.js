@@ -159,7 +159,7 @@ function createHttp(desk) {
 
   function requireDesk(req, res, next) {
     if (req.profile.desk === 'unverified') {
-      return res.status(403).json({ error: 'unverified', message: 'Confirme o e-mail e o celular para entrar no desk.' });
+      return res.status(403).json({ error: 'unverified', message: 'Confirme o e-mail para entrar no desk.' });
     }
     if (!deskAllowed(req.profile)) {
       return res.status(402).json({
@@ -226,7 +226,7 @@ function createHttp(desk) {
   app.post('/v1/auth/register', async (req, res) => {
     const email = String(req.body.email || '').trim().toLowerCase();
     const password = String(req.body.password || '');
-    const phone = String(req.body.phone || '').trim();
+    const phoneRaw = String(req.body.phone || '').trim();
     const name = String(req.body.name || '').trim().slice(0, 80);
     const locale = LOCALES.includes(req.body.locale) ? req.body.locale : 'pt-BR';
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'invalid_body', message: 'E-mail inválido.' });
@@ -234,7 +234,8 @@ function createHttp(desk) {
     if (req.body.passwordConfirm != null && String(req.body.passwordConfirm) !== password) {
       return res.status(400).json({ error: 'password_mismatch', message: 'As senhas não conferem.' });
     }
-    if (!/^\+[1-9]\d{7,14}$/.test(phone)) return res.status(400).json({ error: 'invalid_body', message: 'Celular em formato internacional, por exemplo +5511999998888.' });
+    if (phoneRaw && !/^\+[1-9]\d{7,14}$/.test(phoneRaw)) return res.status(400).json({ error: 'invalid_body', message: 'Celular em formato internacional, por exemplo +5511999998888.' });
+    const phone = phoneRaw || null;
     const passwordHash = await bcrypt.hash(password, 10);
     const client = await pool.connect();
     try {
@@ -248,13 +249,13 @@ function createHttp(desk) {
       await client.query('COMMIT');
       const user = inserted.rows[0];
       const emailCode = await issueCode(user.id, 'email');
-      const phoneCode = await issueCode(user.id, 'sms');
+      const phoneCode = phone ? await issueCode(user.id, 'sms') : null;
       await desk.reloadUser(user.id);
       return res.status(201).json({
         user: publicUser(user),
         verification: {
           emailCode: expose(emailCode),
-          phoneCode: expose(phoneCode),
+          ...(phoneCode ? { phoneCode: expose(phoneCode) } : {}),
           expiresInSec: 600,
           note: 'Nesta instalação o código volta na resposta da API. E-mail e SMS não são enviados.',
         },
@@ -371,7 +372,7 @@ function createHttp(desk) {
     if (!ok) return res.status(400).json({ error: 'bad_code', message: 'Código de e-mail inválido ou vencido.' });
     await pool.query('UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1', [req.user.id]);
     const fresh = await loadUser(req.user.id);
-    if (fresh.email_verified_at && fresh.phone_verified_at) {
+    if (fresh.email_verified_at) {
       await openTrial(fresh.id);
       await maybeStripeCustomer(fresh);
     }

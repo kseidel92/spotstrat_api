@@ -55,12 +55,7 @@ async function main() {
 
   const afterEmail = await j('/v1/auth/verify-email', { method: 'POST', token, body: { code: reg.verification.emailCode } });
   assert(afterEmail.user.emailVerified && !afterEmail.user.phoneVerified, 'só e-mail');
-  try {
-    await j('/v1/strategies', { token });
-    throw new Error('não deveria listar');
-  } catch (err) {
-    assert(err.status === 403, 'ainda sem celular');
-  }
+  assert(afterEmail.user.desk === 'trial', 'trial após e-mail');
   const afterPhone = await j('/v1/auth/verify-phone', { method: 'POST', token, body: { code: reg.verification.phoneCode } });
   assert(afterPhone.user.desk === 'trial', 'trial');
 
