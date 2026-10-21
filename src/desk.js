@@ -5,6 +5,7 @@ const { applyExit } = require('./faithful');
 const { decideScript, markFill } = require('./script');
 const { decideJs } = require('./sandbox');
 const bus = require('./bus');
+const { sendAlarm } = require('./mail');
 
 function num(v) {
   return v == null ? null : Number(v);
@@ -681,7 +682,7 @@ function createDesk(hub) {
               reason: row.reason,
               createdAt: row.created_at,
               seen: false,
-              channels: alarm.channels || { sound: true, email: false, sms: false },
+              channels: alarm.channels || { sound: true, email: false },
               deliveries,
             },
           },
@@ -766,7 +767,7 @@ function createDesk(hub) {
         thesis: (row.explanation?.['pt-BR'] || row.explanation?.en || {}).thesis || row.name,
         stopPct: row.recipe?.exit?.stopPct,
         tpPct: row.recipe?.exit?.tpPct,
-        channels: row.channels || { sound: true, email: false, sms: false },
+        channels: row.channels || { sound: true, email: false },
       })),
       hits: hits.rows.map((row) => ({
         id: row.id,
@@ -781,7 +782,7 @@ function createDesk(hub) {
         reason: row.reason,
         createdAt: row.created_at,
         seen: !!row.seen_at,
-        channels: row.channels || { sound: true, email: false, sms: false },
+        channels: row.channels || { sound: true, email: false },
       })),
       fees: 'VIP0 com BNB: maker 0,075% · taker 0,075%',
     };
@@ -812,31 +813,24 @@ function createDesk(hub) {
   }
 
   async function deliverAlarm(alarm, text) {
-    const channels = alarm.channels || { sound: true, email: false, sms: false };
-    const user = await pool.query('SELECT email, phone_e164 FROM users WHERE id = $1', [alarm.user_id]);
+    const channels = alarm.channels || { sound: true, email: false };
+    const user = await pool.query('SELECT email FROM users WHERE id = $1', [alarm.user_id]);
     const email = user.rows[0]?.email || null;
-    const phone = user.rows[0]?.phone_e164 || null;
     const deliveries = [];
     if (channels.sound !== false) deliveries.push({ channel: 'sound', status: 'device' });
-    if (channels.email) deliveries.push(await pushNotice('email', email, text));
-    if (channels.sms) deliveries.push(await pushNotice('sms', phone, text));
+    if (channels.email) deliveries.push(await pushNotice('email', email, text, `Alarme SpotStrat · ${alarm.name}`));
     return deliveries;
   }
 
   return { start, stop, reloadUser, stateFor, loadAll };
 }
 
-async function pushNotice(channel, to, text) {
+async function pushNotice(channel, to, text, subject) {
   if (!to) return { channel, status: 'missing', to: null };
-  const hook = process.env.NOTIFY_WEBHOOK;
-  if (!hook) return { channel, status: 'desk', to };
+  if (channel !== 'email') return { channel, status: 'desk', to };
   try {
-    const res = await fetch(hook, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ channel, to, text }),
-    });
-    return { channel, status: res.ok ? 'sent' : 'desk', to };
+    const result = await sendAlarm({ to, subject, text });
+    return { channel, status: result.sent ? 'sent' : 'desk', to };
   } catch (err) {
     console.error('[alarm] aviso', channel, err.message);
     return { channel, status: 'desk', to };

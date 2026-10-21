@@ -336,7 +336,6 @@ function channelsOf(raw) {
   return {
     sound: src.sound !== false,
     email: !!src.email,
-    sms: !!src.sms,
   };
 }
 

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { Resend } = require('resend');
 
 async function notifyOwner(subject, text) {
   const dir = path.join(__dirname, '..', 'data');
@@ -31,4 +32,103 @@ async function notifyOwner(subject, text) {
   }
 }
 
-module.exports = { notifyOwner };
+const VERIFY_COPY = {
+  'pt-BR': {
+    subject: 'Seu código da SpotStrat',
+    text: (code) => `Seu código é ${code}. Ele vale por 10 minutos.\n\nSe você não pediu isso, ignore este e-mail.`,
+  },
+  en: {
+    subject: 'Your SpotStrat code',
+    text: (code) => `Your code is ${code}. It expires in 10 minutes.\n\nIf you did not ask for this, ignore this email.`,
+  },
+  es: {
+    subject: 'Tu código de SpotStrat',
+    text: (code) => `Tu código es ${code}. Vale por 10 minutos.\n\nSi no lo pediste, ignora este correo.`,
+  },
+  fr: {
+    subject: 'Votre code SpotStrat',
+    text: (code) => `Votre code est ${code}. Il est valable 10 minutes.\n\nSi vous n’avez rien demandé, ignorez cet e-mail.`,
+  },
+  de: {
+    subject: 'Ihr SpotStrat-Code',
+    text: (code) => `Ihr Code ist ${code}. Er gilt 10 Minuten.\n\nWenn Sie das nicht angefordert haben, ignorieren Sie diese E-Mail.`,
+  },
+  ja: {
+    subject: 'SpotStratのコード',
+    text: (code) => `コードは ${code} です。10分間有効です。\n\n心当たりがなければ、このメールは無視してください。`,
+  },
+};
+
+function verifyCopy(locale) {
+  if (locale === 'es-MX') return VERIFY_COPY.es;
+  return VERIFY_COPY[locale] || VERIFY_COPY.en;
+}
+
+function resendClient() {
+  const key = (process.env.RESEND_API_KEY || '').trim();
+  if (!key) return null;
+  return new Resend(key);
+}
+
+function fromAddress() {
+  const email = (process.env.RESEND_SENDER_EMAIL || 'noreply@spotstrat.com').trim();
+  const name = (process.env.RESEND_SENDER_NAME || 'SpotStrat').trim();
+  return `${name} <${email}>`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function sendMail({ to, subject, text, html }) {
+  const resend = resendClient();
+  if (!resend) return { sent: false, skipped: true };
+  const replyTo = (process.env.RESEND_REPLY_TO || 'support@spotstrat.com').trim();
+  try {
+    const { data, error } = await resend.emails.send({
+      from: fromAddress(),
+      to: [to],
+      replyTo,
+      subject,
+      text,
+      html,
+    });
+    if (error) {
+      console.warn('[mail] resend', error.message || error.name || 'erro');
+      return { sent: false, error: 'resend' };
+    }
+    console.log('[mail] enviado', to, data?.id || '');
+    return { sent: true, id: data?.id || null };
+  } catch (err) {
+    console.warn('[mail] resend', err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+async function sendVerifyCode({ to, name, code, locale }) {
+  const copy = verifyCopy(locale);
+  const text = copy.text(code);
+  const safe = escapeHtml(text).replace(/\n/g, '<br>');
+  return sendMail({
+    to,
+    subject: copy.subject,
+    text,
+    html: `<p style="font-family:sans-serif;font-size:16px;color:#0a0e1a">${safe}</p><p style="font-family:sans-serif;font-size:32px;letter-spacing:0.2em;color:#0a0e1a"><strong>${escapeHtml(code)}</strong></p>`,
+  });
+}
+
+async function sendAlarm({ to, subject, text }) {
+  const safe = escapeHtml(text).replace(/\n/g, '<br>');
+  return sendMail({
+    to,
+    subject: subject || 'Alarme SpotStrat',
+    text,
+    html: `<p style="font-family:sans-serif;font-size:16px;color:#0a0e1a">${safe}</p><p style="font-family:sans-serif;font-size:14px;color:#475569">A ordem continua sua. Responda este e-mail se precisar de ajuda.</p>`,
+  });
+}
+
+module.exports = { notifyOwner, sendVerifyCode, sendAlarm };

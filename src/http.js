@@ -11,7 +11,7 @@ const {
 } = require('./shared');
 const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
-const { notifyOwner } = require('./mail');
+const { notifyOwner, sendVerifyCode } = require('./mail');
 
 const hits = new Map();
 
@@ -62,7 +62,7 @@ async function issueCode(userId, channel) {
      VALUES ($1, $2, $3, now() + interval '10 minutes')`,
     [userId, channel, sha256(code)],
   );
-  console.log(`[otp] ${channel} ${userId} ${code}`);
+  console.log(`[otp] ${channel} ${userId}`);
   return code;
 }
 
@@ -250,14 +250,15 @@ function createHttp(desk) {
       const user = inserted.rows[0];
       const emailCode = await issueCode(user.id, 'email');
       const phoneCode = phone ? await issueCode(user.id, 'sms') : null;
+      const mail = await sendVerifyCode({ to: user.email, name: user.name, code: emailCode, locale: user.locale });
       await desk.reloadUser(user.id);
       return res.status(201).json({
         user: publicUser(user),
         verification: {
-          emailCode: expose(emailCode),
+          emailCode: mail.sent ? undefined : expose(emailCode),
+          sent: mail.sent,
           ...(phoneCode ? { phoneCode: expose(phoneCode) } : {}),
           expiresInSec: 600,
-          note: 'Nesta instalação o código volta na resposta da API. E-mail e SMS não são enviados.',
         },
       });
     } catch (err) {
@@ -431,11 +432,14 @@ function createHttp(desk) {
     }
     if (channel === 'sms' && !req.user.phone_e164) return res.status(400).json({ error: 'invalid_body', message: 'Cadastre o celular antes.' });
     const code = await issueCode(req.user.id, channel);
+    const mail = channel === 'email'
+      ? await sendVerifyCode({ to: req.user.email, name: req.user.name, code, locale: req.user.locale })
+      : { sent: false };
     return res.json({
       ok: true,
       channel,
-      code: expose(code),
-      note: 'Código devolvido na resposta, sem envio externo.',
+      sent: mail.sent,
+      code: mail.sent ? undefined : expose(code),
     });
   });
 
@@ -960,7 +964,6 @@ function cleanChannels(raw) {
   return {
     sound: src.sound !== false,
     email: !!src.email,
-    sms: !!src.sms,
   };
 }
 
