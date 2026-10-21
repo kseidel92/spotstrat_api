@@ -15,7 +15,7 @@ function createDesk(hub) {
   const runners = new Map();
   const users = new Map();
   let alarmRuns = [];
-  const alarmCooldown = new Map();
+  const alarmLive = new Map();
   let timer = null;
   let lastScan = 0;
   let alarmScanAt = 0;
@@ -52,6 +52,7 @@ function createDesk(hub) {
       if (!seen.has(id)) runners.delete(id);
     }
     await loadAlarms();
+    await loadAlarmEpisodes();
   }
 
   async function loadAlarms(userId) {
@@ -60,6 +61,27 @@ function createDesk(hub) {
       : await pool.query('SELECT * FROM alarms');
     if (!userId) alarmRuns = q.rows;
     else alarmRuns = alarmRuns.filter((row) => row.user_id !== userId).concat(q.rows);
+  }
+
+  async function loadAlarmEpisodes() {
+    const { rows } = await pool.query(`SELECT alarm_id, symbol FROM alarm_hits WHERE cleared_at IS NULL`);
+    alarmLive.clear();
+    for (const row of rows) {
+      if (!alarmLive.has(row.alarm_id)) alarmLive.set(row.alarm_id, new Set());
+      alarmLive.get(row.alarm_id).add(row.symbol);
+    }
+  }
+
+  async function alarmEmailRoom(userId) {
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS n
+       FROM alarm_hits
+       WHERE user_id = $1
+         AND email_sent_at >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'
+         AND email_sent_at < date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo' + interval '1 day'`,
+      [userId],
+    );
+    return rows[0].n < 10;
   }
 
   async function reloadUser(userId) {
@@ -637,32 +659,42 @@ function createDesk(hub) {
       try {
         const mare = hub.mareFor({});
         const evaluated = evaluateStrategy({ type: 'recipe', recipe: alarm.recipe, mare_mode: 'any' }, hub, mare);
-        if (!evaluated.want) continue;
-        const key = `${alarm.id}:${evaluated.want.symbol}`;
-        if ((alarmCooldown.get(key) || 0) > Date.now()) continue;
-        const recent = await pool.query(
-          `SELECT 1 FROM alarm_hits
-           WHERE alarm_id = $1 AND symbol = $2 AND created_at > now() - interval '30 minutes'
-           LIMIT 1`,
-          [alarm.id, evaluated.want.symbol],
-        );
-        if (recent.rows[0]) {
-          alarmCooldown.set(key, Date.now() + 30 * 60 * 1000);
+        const open = alarmLive.get(alarm.id);
+        if (!evaluated.want) {
+          if (open?.size) {
+            await pool.query(`UPDATE alarm_hits SET cleared_at = now() WHERE alarm_id = $1 AND cleared_at IS NULL`, [alarm.id]);
+            alarmLive.delete(alarm.id);
+          }
           continue;
         }
         const want = evaluated.want;
+        if (open?.has(want.symbol)) continue;
+        if (open?.size) {
+          await pool.query(
+            `UPDATE alarm_hits SET cleared_at = now() WHERE alarm_id = $1 AND symbol <> $2 AND cleared_at IS NULL`,
+            [alarm.id, want.symbol],
+          );
+        }
         const stopPct = ((want.entry - want.stop) / want.entry) * 100;
         const tpPct = ((want.tp - want.entry) / want.entry) * 100;
         const inserted = await pool.query(
           `INSERT INTO alarm_hits (alarm_id, user_id, symbol, price, stop, tp, stop_pct, tp_pct, reason)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (alarm_id, symbol) WHERE cleared_at IS NULL DO NOTHING
            RETURNING id, symbol, price, stop, tp, stop_pct, tp_pct, reason, created_at`,
           [alarm.id, alarm.user_id, want.symbol, want.entry, want.stop, want.tp, stopPct, tpPct, want.reason || alarm.name],
         );
-        alarmCooldown.set(key, Date.now() + 30 * 60 * 1000);
+        if (!inserted.rows[0]) {
+          if (!alarmLive.has(alarm.id)) alarmLive.set(alarm.id, new Set());
+          alarmLive.get(alarm.id).add(want.symbol);
+          continue;
+        }
+        if (!alarmLive.has(alarm.id)) alarmLive.set(alarm.id, new Set());
+        alarmLive.get(alarm.id).add(want.symbol);
         const row = inserted.rows[0];
         const deliveries = await deliverAlarm(
           alarm,
+          row.id,
           `${alarm.name} em ${want.symbol}. Preço ${Number(want.entry).toFixed(4)}. Stop ${Number(want.stop).toFixed(4)}. Alvo ${Number(want.tp).toFixed(4)}. A ordem continua sua.`,
         );
         bus.emit('push', {
@@ -812,13 +844,23 @@ function createDesk(hub) {
     return Promise.all([...runners.values()].filter((r) => r.dirty).map(persist));
   }
 
-  async function deliverAlarm(alarm, text) {
+  async function deliverAlarm(alarm, hitId, text) {
     const channels = alarm.channels || { sound: true, email: false };
     const user = await pool.query('SELECT email FROM users WHERE id = $1', [alarm.user_id]);
     const email = user.rows[0]?.email || null;
     const deliveries = [];
     if (channels.sound !== false) deliveries.push({ channel: 'sound', status: 'device' });
-    if (channels.email) deliveries.push(await pushNotice('email', email, text, `Alarme SpotStrat · ${alarm.name}`));
+    if (channels.email) {
+      if (!(await alarmEmailRoom(alarm.user_id))) {
+        deliveries.push({ channel: 'email', status: 'capped', to: email });
+      } else {
+        const notice = await pushNotice('email', email, text, `Alarme SpotStrat · ${alarm.name}`);
+        if (notice.status === 'sent') {
+          await pool.query(`UPDATE alarm_hits SET email_sent_at = now() WHERE id = $1`, [hitId]);
+        }
+        deliveries.push(notice);
+      }
+    }
     return deliveries;
   }
 

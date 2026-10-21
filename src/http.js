@@ -11,7 +11,7 @@ const {
 } = require('./shared');
 const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
-const { notifyOwner, sendVerifyCode } = require('./mail');
+const { notifyOwner, sendVerifyCode, sendResetCode } = require('./mail');
 
 const hits = new Map();
 
@@ -269,6 +269,48 @@ function createHttp(desk) {
     } finally {
       client.release();
     }
+  });
+
+  app.post('/v1/auth/forgot', async (req, res) => {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const locale = LOCALES.includes(req.body.locale) ? req.body.locale : 'pt-BR';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'invalid_body', message: 'E-mail inválido.' });
+    if (!allow(`forgot:${email}`, 1, 60_000) || !allow(`forgotip:${req.ip}`, 10, 3600_000)) {
+      return res.status(429).json({ error: 'rate_limited', message: 'Espere um minuto para pedir outro código.' });
+    }
+    const { rows } = await pool.query('SELECT id, name, locale, email FROM users WHERE email = $1', [email]);
+    if (rows[0]) {
+      const code = await issueCode(rows[0].id, 'reset');
+      await sendResetCode({ to: rows[0].email, name: rows[0].name, code, locale: rows[0].locale || locale });
+    }
+    return res.json({ ok: true });
+  });
+
+  app.post('/v1/auth/reset-password', async (req, res) => {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const code = String(req.body.code || '').trim();
+    const password = String(req.body.password || '');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'invalid_body', message: 'E-mail inválido.' });
+    if (password.length < 8) return res.status(400).json({ error: 'invalid_body', message: 'A senha precisa de 8 caracteres.' });
+    if (req.body.passwordConfirm != null && String(req.body.passwordConfirm) !== password) {
+      return res.status(400).json({ error: 'password_mismatch', message: 'As senhas não conferem.' });
+    }
+    if (!allow(`reset:${email}`, 8, 600_000)) return res.status(429).json({ error: 'rate_limited', message: 'Muitas tentativas. Espere um pouco.' });
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = rows[0];
+    if (!user || !(await consumeCode(user.id, 'reset', code))) {
+      return res.status(400).json({ error: 'bad_code', message: 'Código inválido ou vencido.' });
+    }
+    const passwordHash = await bcrypt.hash(password, 10);
+    await pool.query(
+      `UPDATE users SET password_hash = $1, email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $2`,
+      [passwordHash, user.id],
+    );
+    const fresh = await loadUser(user.id);
+    if (!fresh.trial_started_at) await openTrial(fresh.id);
+    await maybeStripeCustomer(fresh);
+    await desk.reloadUser(fresh.id);
+    return res.json({ ok: true });
   });
 
   app.post('/v1/auth/login', async (req, res) => {

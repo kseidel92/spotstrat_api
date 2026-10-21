@@ -126,6 +126,19 @@ CREATE TABLE IF NOT EXISTS alarm_hits (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS alarm_hits_user_idx ON alarm_hits (user_id, created_at DESC);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'alarm_hits' AND column_name = 'cleared_at'
+  ) THEN
+    ALTER TABLE alarm_hits ADD COLUMN cleared_at timestamptz;
+    ALTER TABLE alarm_hits ADD COLUMN email_sent_at timestamptz;
+    UPDATE alarm_hits SET cleared_at = created_at WHERE cleared_at IS NULL;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS alarm_hits_open_idx ON alarm_hits (alarm_id, symbol) WHERE cleared_at IS NULL;
+CREATE INDEX IF NOT EXISTS alarm_hits_email_day_idx ON alarm_hits (user_id, email_sent_at);
 ALTER TABLE alarms ADD COLUMN IF NOT EXISTS channels jsonb NOT NULL DEFAULT '{"sound":true,"email":false,"sms":false}'::jsonb;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_tier text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub text;

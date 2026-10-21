@@ -109,16 +109,48 @@ async function sendMail({ to, subject, text, html }) {
   }
 }
 
-async function sendVerifyCode({ to, name, code, locale }) {
+const RESET_COPY = {
+  'pt-BR': {
+    subject: 'Nova senha da SpotStrat',
+    text: (code) => `Seu código para criar uma senha nova é ${code}. Ele vale por 10 minutos.\n\nSe você não pediu isso, ignore este e-mail.`,
+  },
+  en: {
+    subject: 'New SpotStrat password',
+    text: (code) => `Your code to set a new password is ${code}. It expires in 10 minutes.\n\nIf you did not ask for this, ignore this email.`,
+  },
+  es: {
+    subject: 'Nueva contraseña de SpotStrat',
+    text: (code) => `Tu código para crear una contraseña nueva es ${code}. Vale por 10 minutos.\n\nSi no lo pediste, ignora este correo.`,
+  },
+  fr: {
+    subject: 'Nouveau mot de passe SpotStrat',
+    text: (code) => `Votre code pour créer un nouveau mot de passe est ${code}. Il est valable 10 minutes.\n\nSi vous n’avez rien demandé, ignorez cet e-mail.`,
+  },
+  de: {
+    subject: 'Neues SpotStrat-Passwort',
+    text: (code) => `Ihr Code für ein neues Passwort ist ${code}. Er gilt 10 Minuten.\n\nWenn Sie das nicht angefordert haben, ignorieren Sie diese E-Mail.`,
+  },
+  ja: {
+    subject: 'SpotStratの新しいパスワード',
+    text: (code) => `新しいパスワード用のコードは ${code} です。10分間有効です。\n\n心当たりがなければ、このメールは無視してください。`,
+  },
+};
+
+function codeHtml(text, code) {
+  const safe = escapeHtml(text).replace(/\n/g, '<br>');
+  return `<p style="font-family:sans-serif;font-size:16px;color:#0a0e1a">${safe}</p><p style="font-family:sans-serif;font-size:32px;letter-spacing:0.2em;color:#0a0e1a"><strong>${escapeHtml(code)}</strong></p>`;
+}
+
+async function sendVerifyCode({ to, code, locale }) {
   const copy = verifyCopy(locale);
   const text = copy.text(code);
-  const safe = escapeHtml(text).replace(/\n/g, '<br>');
-  return sendMail({
-    to,
-    subject: copy.subject,
-    text,
-    html: `<p style="font-family:sans-serif;font-size:16px;color:#0a0e1a">${safe}</p><p style="font-family:sans-serif;font-size:32px;letter-spacing:0.2em;color:#0a0e1a"><strong>${escapeHtml(code)}</strong></p>`,
-  });
+  return sendMail({ to, subject: copy.subject, text, html: codeHtml(text, code) });
+}
+
+async function sendResetCode({ to, code, locale }) {
+  const copy = locale === 'es-MX' ? RESET_COPY.es : (RESET_COPY[locale] || RESET_COPY.en);
+  const text = copy.text(code);
+  return sendMail({ to, subject: copy.subject, text, html: codeHtml(text, code) });
 }
 
 async function sendAlarm({ to, subject, text }) {
@@ -131,4 +163,4 @@ async function sendAlarm({ to, subject, text }) {
   });
 }
 
-module.exports = { notifyOwner, sendVerifyCode, sendAlarm };
+module.exports = { notifyOwner, sendVerifyCode, sendResetCode, sendAlarm };
