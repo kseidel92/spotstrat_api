@@ -764,6 +764,9 @@ function createHttp(desk) {
 
   app.post('/v1/alarms/:id/channels', auth, currentUser, requireDesk, async (req, res) => {
     const channels = cleanChannels(req.body || {});
+    if (!channels.sound && !channels.email) {
+      return res.status(400).json({ error: 'invalid_body', message: 'Marque o som, o e-mail ou os dois.' });
+    }
     const updated = await pool.query(
       `UPDATE alarms SET channels = $3::jsonb WHERE id = $1 AND user_id = $2 RETURNING id`,
       [req.params.id, req.user.id, JSON.stringify(channels)],
@@ -1050,6 +1053,13 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
   if (!allow(`prompt-h:${req.user.id}`, 60, 3600_000)) {
     await savePrompt(req, { prompt, mode, status: 'rejected', detail: 'Muitos prompts em pouco tempo.', threadId, strategyId });
     return { status: 429, error: { error: 'rate_limited', message: 'Muitos prompts em pouco tempo. Tenta de novo mais tarde.' } };
+  }
+  if (mode === 'alarm') {
+    const channels = cleanChannels(req.body.options?.channels || {});
+    if (!channels.sound && !channels.email) {
+      await savePrompt(req, { prompt, mode, status: 'rejected', detail: 'Alarme sem aviso.', threadId, strategyId });
+      return { status: 400, error: { error: 'invalid_body', message: 'Marque o som, o e-mail ou os dois.' } };
+    }
   }
   if (!strategyId && req.body.mode !== 'alarm' && req.body.options && walletOf(req.body.options.wallet) == null && req.body.options.wallet != null && req.body.options.wallet !== '') {
     await savePrompt(req, { prompt, mode, status: 'rejected', detail: 'Carteira fora do intervalo.', strategyId });

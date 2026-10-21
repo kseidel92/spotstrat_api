@@ -333,10 +333,12 @@ async function runJob(job) {
 
 function channelsOf(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  return {
+  const channels = {
     sound: src.sound !== false,
     email: !!src.email,
   };
+  if (!channels.sound && !channels.email) channels.sound = true;
+  return channels;
 }
 
 async function saveAlarm(job, recipe) {
