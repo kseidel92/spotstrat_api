@@ -498,4 +498,53 @@ async function completeLabChat({ messages, locale, labContext }) {
   return { reply: '', provider: 'none' };
 }
 
-module.exports = { completeRecipe, completeLabChat, mockComplete, settle, parseModelJson, CATALOG, detectKind, baseRecipe };
+const GUIDE_SPEC = {
+  touches: { entryType: 'pattern', sources: ['candles'] },
+  swings: { entryType: 'momentum', sources: ['candles'] },
+  dump: { entryType: 'momentum', sources: ['candles', 'trades', 'book'] },
+  lead: { entryType: 'momentum', sources: ['candles', 'book'] },
+  spike: { entryType: 'momentum', sources: ['candles', 'trades', 'book'] },
+  laggard: { entryType: 'momentum', sources: ['candles'] },
+  range: { entryType: 'breakout', sources: ['candles'] },
+  pattern: { entryType: 'pattern', sources: ['candles'], stopPct: 0.8, tpPct: 1.2, name: 'Engolfo no fundo' },
+  cross: { entryType: 'cross', sources: ['candles', 'ema'], stopPct: 0.8, tpPct: 1.6, name: 'Cruzamento de médias' },
+  breakout: { entryType: 'breakout', sources: ['candles'], stopPct: 1.2, tpPct: 2.2, name: 'Rompimento de faixa' },
+  momentum: { entryType: 'momentum', sources: ['candles', 'trades'], stopPct: 1, tpPct: 1.8, name: 'Impulso curto' },
+};
+
+function guideKindOf(guide) {
+  const text = String(guide?.entry || '');
+  const known = detectKind(text);
+  if (known) return known;
+  const t = text.toLowerCase();
+  if (/engulf|engolfo|engolfe|padrão de vela|padrao de vela/.test(t)) return 'pattern';
+  if (/\bema\b|cruzamento|cruzar|cruza/.test(t)) return 'cross';
+  if (/romp|breakout|máxima das|maxima das/.test(t)) return 'breakout';
+  if (/sobe|subir|impulso|momentum/.test(t)) return 'momentum';
+  const type = String(guide?.entryType || '');
+  if (GUIDE_SPEC[type]) return type;
+  return 'touches';
+}
+
+function suggestGuide(guide, step) {
+  const kind = guideKindOf(guide || {});
+  const spec = GUIDE_SPEC[kind] || GUIDE_SPEC.touches;
+  const catalogued = !['pattern', 'cross', 'breakout', 'momentum'].includes(kind);
+  const base = catalogued ? baseRecipe(kind) : null;
+  const allowed = ['entry', 'entryType', 'sources', 'list', 'exit', 'review'];
+  return {
+    step: allowed.includes(step) ? step : 'entry',
+    kind,
+    entryType: spec.entryType,
+    sources: spec.sources,
+    list: 'no',
+    exitKind: 'numbers',
+    stop: String(spec.stopPct ?? base.stopPct),
+    target: String(spec.tpPct ?? base.tpPct),
+    name: spec.name || base.name,
+  };
+}
+
+module.exports = {
+  completeRecipe, completeLabChat, mockComplete, settle, parseModelJson, CATALOG, detectKind, baseRecipe, suggestGuide,
+};

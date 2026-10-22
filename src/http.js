@@ -12,6 +12,7 @@ const {
 const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
 const { notifyOwner, sendVerifyCode, sendResetCode } = require('./mail');
+const { suggestGuide } = require('./llm');
 
 const hits = new Map();
 
@@ -766,6 +767,12 @@ function createHttp(desk) {
       threadId: thread.rows[0]?.id || null,
       messages,
     });
+  });
+
+  app.post('/v1/strategies/guide-suggest', auth, currentUser, requireDesk, (req, res) => {
+    const guide = req.body?.guide && typeof req.body.guide === 'object' ? req.body.guide : {};
+    const step = String(req.body?.step || 'entry');
+    res.json(suggestGuide(guide, step));
   });
 
   app.post('/v1/strategies/prompt', auth, currentUser, requireDesk, async (req, res) => {
