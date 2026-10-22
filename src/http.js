@@ -784,9 +784,6 @@ function createHttp(desk) {
 
   app.post('/v1/alarms/:id/channels', auth, currentUser, requireDesk, async (req, res) => {
     const channels = cleanChannels(req.body || {});
-    if (!channels.sound && !channels.email) {
-      return res.status(400).json({ error: 'invalid_body', message: 'Marque o som, o e-mail ou os dois.' });
-    }
     const updated = await pool.query(
       `UPDATE alarms SET channels = $3::jsonb WHERE id = $1 AND user_id = $2 RETURNING id`,
       [req.params.id, req.user.id, JSON.stringify(channels)],
@@ -907,7 +904,7 @@ function createHttp(desk) {
         }
       } else {
         await pool.query(
-          `UPDATE strategies SET name=$1, type=$2, mare_mode=$3, params=$4::jsonb, description=$5, explanation=$6::jsonb, source='preset'
+          `UPDATE strategies SET name=$1, type=$2, mare_mode=$3, params=$4::jsonb, description=$5, explanation=$6::jsonb, source='preset', paused=false, status='active'
            WHERE id=$7 AND user_id=$8`,
           [preset.name, preset.type, preset.mareMode, JSON.stringify(preset.params), preset.description, JSON.stringify(preset.explanation), rows[0].id, req.user.id],
         );
