@@ -1,4 +1,4 @@
-const { validateRecipe } = require('./shared');
+const { validateRecipe, promptNumbers } = require('./shared');
 const { bars } = require('./faithful');
 
 const FUNCS = new Set([
@@ -210,13 +210,6 @@ function num(text) {
   return Number(String(text).replace(',', '.'));
 }
 
-function promptNumbers(text) {
-  const body = String(text || '').replace(/QA\s*\d+/gi, ' ');
-  const found = [];
-  for (const m of body.matchAll(/\d+(?:[.,]\d+)?/g)) found.push(num(m[1] ? m[0] : m[0]));
-  return [...new Set(found.filter((n) => Number.isFinite(n)))];
-}
-
 function related(scriptNum, promptNum) {
   if (!Number.isFinite(scriptNum) || !Number.isFinite(promptNum)) return false;
   const opts = [promptNum, promptNum / 100, promptNum * 60, 1 - promptNum / 100, 1 + promptNum / 100];
@@ -228,8 +221,8 @@ function allowedLiteral(n, prompts) {
   return prompts.some((p) => related(n, p));
 }
 
-function checkFidelity(script, literals, userText) {
-  const prompts = promptNumbers(userText);
+function checkFidelity(script, literals, userText, locale) {
+  const prompts = promptNumbers(userText, locale);
   const used = [...literals];
   if (script.tfMin) used.push(script.tfMin);
   if (script.buyFrac && !script.sizeNote) used.push(script.buyFrac);
@@ -742,7 +735,7 @@ function recipeFromModel(data, userText, locale) {
   const script = normalizeScript(data);
   const compiled = compileScript(script);
   if (!compiled.ok) return { ask: compiled.error, retry: true };
-  const fidelity = checkFidelity(script, compiled.literals, userText);
+  const fidelity = checkFidelity(script, compiled.literals, userText, locale);
   if (!fidelity.ok) return { ask: fidelity.error, retry: true };
   const text = {
     thesis: String(data.thesis || data.entryText || script.enter || 'Regra do pedido.'),

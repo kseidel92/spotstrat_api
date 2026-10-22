@@ -204,11 +204,33 @@ function unaskedEma(text, recipe) {
   return !/ema|m[eé]dia m[oó]vel/i.test(text);
 }
 
-function settle(data, { messages, locale, current, mode }) {
+function optionNote(options) {
+  if (!options || options.guided) return '';
+  const lines = [];
+  const stop = Number(options.stopPct);
+  const target = Number(options.tpPct);
+  const hold = Number(options.maxHoldMin);
+  if (options.exit === 'manual' && stop > 0 && target > 0) {
+    lines.push(`A pessoa já escolheu o stop de ${stop}% e o alvo de ${target}% a partir da entrada. O código usa esses percentuais. Não troque por outro.`);
+  } else if (options.exit === 'history' && !options.historyApplied) {
+    lines.push('A pessoa pediu stop e alvo medidos nas velas de 18 meses. Esse arquivo é só de velas, sem livro e sem tape. Não invente percentual de stop nem de alvo. No buy, use stop: null e target: null.');
+  }
+  if (options.timeExit && options.time === 'manual' && hold > 0) {
+    lines.push(`A pessoa já escolheu fechar a posição depois de ${hold} minutos se o stop e o alvo não saírem. Venda quando ctx.position.minutesHeld chegar a ${hold}.`);
+  } else if (options.timeExit && options.time === 'history' && !options.historyApplied) {
+    lines.push('A pessoa pediu o tempo de saída medido nessas mesmas velas. Não invente um prazo em minutos.');
+  } else if (options.timeExit === false) {
+    lines.push('A pessoa não pediu saída por tempo. Não feche a posição só porque passou um número de minutos.');
+  }
+  return lines.join('\n');
+}
+
+function settle(data, { messages, locale, current, mode, options }) {
   const users = (messages || []).filter((m) => m.role === 'user');
   const last = users[users.length - 1];
   const lastText = (last && last.content) || '';
-  const blob = users.map((m) => m.content).join('\n');
+  const chosen = optionNote(options);
+  const blob = users.map((m) => m.content).join('\n') + (chosen ? `\n${chosen}` : '');
   if (!data) {
     if (lastText.trim().length < 8 && !confirmingText(lastText)) {
       return { ask: 'Descreve o gatilho em uma frase: o movimento, a janela, e se quiser o stop e o alvo.' };
@@ -216,7 +238,7 @@ function settle(data, { messages, locale, current, mode }) {
     return { ask: 'Não achei o gatilho. Diz o movimento e a janela, por exemplo: sobe 1% em 3 minutos.' };
   }
   if (refusesSwap(lastText)) return { ask: 'Não crio uma estratégia diferente da que você descreveu.' };
-  if (data.code || data.ask || (Array.isArray(data.questions) && data.questions.length)) return buildJsRecipe(data, blob, locale, { alarm: mode === 'alarm' });
+  if (data.code || data.ask || (Array.isArray(data.questions) && data.questions.length)) return buildJsRecipe(data, blob, locale, { ...(options || {}), alarm: mode === 'alarm' });
   return recipeFromModel(data, blob, locale);
 }
 
@@ -362,8 +384,8 @@ const ALARM_NOTE = [
   'alert não abre ordem. A ordem continua com a pessoa.',
 ].join('\n');
 
-async function completeRecipe({ messages, locale, current, labContext, mode }) {
-  const local = settle(null, { messages, locale, current, mode });
+async function completeRecipe({ messages, locale, current, labContext, mode, options, exitHint }) {
+  const local = settle(null, { messages, locale, current, mode, options });
   const openai = secret('OPENAI_API_KEY');
   const anthropic = secret('ANTHROPIC_API_KEY');
   const provider = openai ? 'openai' : anthropic ? 'anthropic' : '';
@@ -371,7 +393,9 @@ async function completeRecipe({ messages, locale, current, labContext, mode }) {
   const extra = [
     current ? `Receita atual (mude só o que o usuário pediu): ${JSON.stringify(current)}` : '',
     labContext ? `Histórico antigo de preço, só vela. O ao vivo tem ctx.trades e ctx.book: ${labContext}` : '',
-    'Escreva function strategy(ctx) com os números do pedido. Use ctx.trades e ctx.book quando a regra falar de fluxo, tape, aggTrades ou livro. Se faltar número, crie com um padrão em defaults. Não recuse.',
+    'Escreva function strategy(ctx) com os números do pedido. Use ctx.trades e ctx.book quando a regra falar de fluxo, tape, aggTrades ou livro. Se faltar um número necessário, não invente: deixe code vazio, deixe defaults vazio e faça uma pergunta.',
+    optionNote(options),
+    exitHint || '',
     mode === 'alarm' ? ALARM_NOTE : '',
   ].filter(Boolean).join('\n');
   let data = null;
@@ -393,14 +417,14 @@ async function completeRecipe({ messages, locale, current, labContext, mode }) {
       if (attempt === 1) data = null;
     }
   }
-  let settled = settle(data, { messages, locale, current, mode });
+  let settled = settle(data, { messages, locale, current, mode, options });
   for (let fix = 0; fix < 2 && settled.retry; fix++) {
     try {
       const note = `${extra}\n${settled.ask}`;
       const again = provider === 'openai'
         ? await callOpenAI({ messages, locale, extra: note })
         : await callAnthropic({ messages, locale, extra: note });
-      const second = settle(again, { messages, locale, current, mode });
+      const second = settle(again, { messages, locale, current, mode, options });
       if (second.recipe || (second.ask && !vagueAsk(second))) settled = second;
     } catch (err) {
       console.error('[llm]', err.message);

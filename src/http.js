@@ -1047,6 +1047,7 @@ function cleanOptions(raw) {
     mareMode: ['any', 'good', 'not_bad'].includes(raw.mareMode) ? raw.mareMode : 'any',
     channels: cleanChannels(raw.channels || {}),
     wallet: raw.wallet == null || raw.wallet === '' ? 1000 : walletOf(raw.wallet),
+    guided: !!raw.guided,
   };
 }
 

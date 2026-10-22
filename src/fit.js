@@ -210,4 +210,144 @@ function fitFiles(files, spec, opts) {
   return fitBars(list, spec, opts);
 }
 
-module.exports = { specFromRecipe, fitBars, fitFiles, compact, suggestTp };
+const { sma, ema, rsi, atr, vwap, highest, lowest, crossedUp, crossedDown } = require('./sandbox');
+const { brtDay } = require('./shared');
+
+function signalTf(code) {
+  const counts = {};
+  for (const match of String(code || '').matchAll(/candles\(\s*['"](1m|5m|15m|1h|4h)['"]\s*\)/g)) {
+    counts[match[1]] = (counts[match[1]] || 0) + 1;
+  }
+  const minutes = { '1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240 };
+  const keys = Object.keys(counts);
+  if (!keys.length) return 5;
+  keys.sort((a, b) => counts[b] - counts[a] || minutes[b] - minutes[a]);
+  return minutes[keys[0]];
+}
+
+function loadBars(file, tfMin) {
+  const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const ms = tfMin * 60000;
+  const out = [];
+  let cur = null;
+  for (const row of rows) {
+    const t = Math.floor(Number(row[0]) / ms) * ms;
+    const open = +row[1];
+    const high = +row[2];
+    const low = +row[3];
+    const close = +row[4];
+    const volume = +row[5] || 0;
+    if (!(close > 0)) continue;
+    if (!cur || cur.time !== t) {
+      if (cur) out.push(cur);
+      cur = { time: t, open, high, low, close, volume };
+    } else {
+      if (high > cur.high) cur.high = high;
+      if (low < cur.low) cur.low = low;
+      cur.close = close;
+      cur.volume += volume;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function attachSeries(window) {
+  window.open = window.map((bar) => bar.open);
+  window.high = window.map((bar) => bar.high);
+  window.low = window.map((bar) => bar.low);
+  window.close = window.map((bar) => bar.close);
+  window.volume = window.map((bar) => bar.volume);
+  window.time = window.map((bar) => bar.time);
+  return window;
+}
+
+function entriesOf(code, bars) {
+  let run;
+  try {
+    run = new Function('ctx', `${code}\nreturn strategy(ctx);`);
+  } catch {
+    return [];
+  }
+  const found = [];
+  let prev = false;
+  const memory = {};
+  for (let i = 40; i < bars.length; i++) {
+    const window = attachSeries(bars.slice(Math.max(0, i - 299), i + 1));
+    const last = window[window.length - 1];
+    let out = null;
+    try {
+      out = run({
+        candles: () => window,
+        price: last.close,
+        now: last.time,
+        memory,
+        position: null,
+        symbol: 'HIST',
+        pct24: 0,
+        open24: last.open,
+        book: () => ({ time: last.time, bids: [], asks: [] }),
+        bookSnaps: () => [],
+        trades: () => [],
+        priceAgo: () => null,
+        hourBrt: () => new Date(last.time - 3 * 3600 * 1000).getUTCHours(),
+        dayBrt: (time) => brtDay(time == null ? last.time : time),
+        sma, ema, rsi, atr, vwap, highest, lowest, crossedUp, crossedDown,
+        at(values, index) {
+          if (!values || !values.length) return null;
+          const i = index < 0 ? values.length + index : index;
+          const value = values[i];
+          return value == null || !Number.isFinite(value) ? null : value;
+        },
+      });
+    } catch {
+      prev = false;
+      continue;
+    }
+    if (out && out.action === 'buy') {
+      if (!prev) found.push(i);
+      prev = true;
+    } else prev = false;
+  }
+  return found;
+}
+
+function fitCode(files, code, opts) {
+  const tfMin = signalTf(code);
+  const grid = combosOf({ ...opts, tfMin });
+  if (!grid.length) return { ok: false, reason: 'grid', tfMin };
+  const stats = grid.map(() => ({ n: 0, sum: 0 }));
+  const used = [];
+  let signals = 0;
+  for (const file of files) {
+    const bars = loadBars(file, tfMin);
+    const entries = entriesOf(code, bars);
+    signals += entries.length;
+    if (!entries.length) continue;
+    used.push(path.basename(file).replace(/_1m\.json$/, ''));
+    const series = { h: bars.map((bar) => bar.high), l: bars.map((bar) => bar.low), c: bars.map((bar) => bar.close) };
+    for (let k = 0; k < grid.length; k++) scoreCombo(series, entries, grid[k], stats[k]);
+  }
+  let best = null;
+  for (let k = 0; k < grid.length; k++) {
+    const stat = stats[k];
+    if (stat.n < MIN_N) continue;
+    const avg = stat.sum / stat.n;
+    if (!best || avg > best.avgPct) best = { ...grid[k], n: stat.n, avgPct: avg };
+  }
+  if (!best) {
+    return { ok: false, reason: signals ? 'few' : 'candle-only', symbols: used, tfMin, signals };
+  }
+  return {
+    ok: true,
+    stopPct: best.stopPct,
+    tpPct: best.tpPct,
+    maxHoldMin: best.maxHoldMin,
+    n: best.n,
+    avgPct: Number(best.avgPct.toFixed(3)),
+    symbols: used,
+    tfMin,
+  };
+}
+
+module.exports = { specFromRecipe, fitBars, fitFiles, compact, suggestTp, fitCode, signalTf };

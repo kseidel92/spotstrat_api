@@ -129,6 +129,29 @@ function fitFiles() {
     .slice(0, 3);
 }
 
+function fitJsExits({ code, fitStop, fitHold, stopPct, tpPct, maxHoldMin }) {
+  const files = fitFiles();
+  if (!code || !files.length) return Promise.resolve({ ok: false, reason: files.length ? 'candle-only' : 'no-file' });
+  const id = seq++;
+  ensureWorker().postMessage({
+    id,
+    type: 'fit-js',
+    files,
+    code,
+    opts: { fitStop: !!fitStop, fitHold: !!fitHold, stopPct, tpPct, maxHoldMin },
+  });
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      resolve({ ok: false, reason: 'timeout' });
+    }, 90000);
+    pending.set(id, {
+      resolve: (msg) => { clearTimeout(timer); resolve(msg.fit || { ok: false }); },
+      reject: () => { clearTimeout(timer); resolve({ ok: false, reason: 'error' }); },
+    });
+  });
+}
+
 function fitExits({ recipe, fitStop, fitHold, stopPct, tpPct, maxHoldMin }) {
   const spec = specFromRecipe(recipe);
   const files = fitFiles();
@@ -312,6 +335,7 @@ module.exports = {
   artifactByName: (name) => artifacts.find((a) => a.id === name || a.name === name) || null,
   klines,
   fitExits,
+  fitJsExits,
   answerQuery,
   contextForPrompt,
 };

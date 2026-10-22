@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
-const { validateRecipe } = require('./shared');
+const { validateRecipe, promptNumbers, brtDay, localeFamily } = require('./shared');
 const { bars } = require('./faithful');
 
 const DIR = path.join(__dirname, '../data/strategies');
@@ -230,12 +230,12 @@ function copyBook(book) {
 
 function packCandles(list) {
   const bars = list.map((k) => ({
-    time: k.t,
-    open: k.o,
-    high: k.h,
-    low: k.l,
-    close: k.c,
-    volume: k.v || 0,
+    time: k.t != null ? k.t : k.time,
+    open: k.o != null ? k.o : k.open,
+    high: k.h != null ? k.h : k.high,
+    low: k.l != null ? k.l : k.low,
+    close: k.c != null ? k.c : k.close,
+    volume: (k.v != null ? k.v : k.volume) || 0,
   }));
   bars.time = bars.map((bar) => bar.time);
   bars.open = bars.map((bar) => bar.open);
@@ -243,6 +243,9 @@ function packCandles(list) {
   bars.low = bars.map((bar) => bar.low);
   bars.close = bars.map((bar) => bar.close);
   bars.volume = bars.map((bar) => bar.volume);
+  bars.slice = function slice(start, end) {
+    return packCandles(Array.prototype.slice.call(this, start, end));
+  };
   return bars;
 }
 
@@ -256,6 +259,9 @@ function makeCtx(row, now, position, memory) {
     open24: row.open24h || null,
     hourBrt() {
       return new Date(now - 3 * 3600 * 1000).getUTCHours();
+    },
+    dayBrt(time) {
+      return brtDay(time == null ? now : time);
     },
     memory: memory && typeof memory === 'object' ? memory : {},
     position: position ? {
@@ -408,13 +414,9 @@ function validateCode(code) {
   return { ok: true };
 }
 
-function promptNumbers(text) {
-  const body = String(text || '').replace(/QA\s*\d+/gi, ' ');
-  return [...new Set([...body.matchAll(/\d+(?:[.,]\d+)?/g)].map((m) => Number(m[0].replace(',', '.'))).filter((n) => Number.isFinite(n)))];
-}
-
 function mentionsDuration(text) {
-  return /\b(?:hora|minuto|min|segundo|seg|dia)s?\b|\d\s*h\b/i.test(String(text || ''));
+  const body = String(text || '');
+  return /\b(?:horas?|minutos?|mins?|segundos?|segs?|dias?|hours?|minutes?|seconds?|secs?|days?|heures?|secondes?|jours?|stunden?|minuten|sekunden|tage?|días?)\b|\d\s*h\b|分|時間|秒/i.test(body);
 }
 
 function related(scriptNum, promptNum) {
@@ -434,12 +436,33 @@ function related(scriptNum, promptNum) {
   return opts.some((v) => Math.abs(v - scriptNum) < 1e-6);
 }
 
-function defaultNumbers(defaults) {
-  return (defaults || []).flatMap((item) => promptNumbers(item.value));
+function defaultNumbers(defaults, locale) {
+  return (defaults || []).flatMap((item) => promptNumbers(item.value, locale));
 }
 
-function checkNumbers(code, userText, defaults) {
-  const prompts = [...promptNumbers(userText), ...defaultNumbers(defaults)];
+function foreignNumberAsk(foreign, locale) {
+  const list = foreign.join(', ');
+  const family = localeFamily(locale);
+  if (family === 'en') return `The number ${list} is not in the request. Rewrite the condition with the quantity the person wrote. A minimum of bars may be that quantity plus one. Do not raise the quantity and do not invent another number.`;
+  if (family === 'es') return `El número ${list} no está en el pedido. Reescribe la condición con la cantidad que la persona escribió. Un mínimo de velas puede ser esa cantidad más uno. No aumentes la cantidad y no inventes otro número.`;
+  if (family === 'fr') return `Le nombre ${list} n'est pas dans la demande. Réécris la condition avec la quantité écrite. Un minimum de bougies peut être cette quantité plus un. N'augmente pas la quantité et n'invente pas un autre nombre.`;
+  if (family === 'de') return `Die Zahl ${list} steht nicht in der Anfrage. Schreibe die Bedingung mit der genannten Menge. Ein Minimum an Kerzen darf diese Menge plus eins sein. Erhöhe die Menge nicht und erfinde keine andere Zahl.`;
+  if (family === 'ja') return `数値 ${list} は依頼にありません。書かれた数量で条件を書き直してください。足切りの本数はその数量に1を足した数までです。数量を増やさず、別の数値を作らないでください。`;
+  return `O número ${list} não está no pedido. Reescreva a condição com a quantidade que a pessoa escreveu. Um mínimo de velas pode ser essa quantidade mais um. Não aumente a quantidade da condição e não invente outro número.`;
+}
+
+function missingNumberAsk(label, locale) {
+  const family = localeFamily(locale);
+  if (family === 'en') return `The request does not define ${label}. What is the number?`;
+  if (family === 'es') return `El pedido no define ${label}. ¿Cuál es el número?`;
+  if (family === 'fr') return `La demande ne définit pas ${label}. Quel est le nombre ?`;
+  if (family === 'de') return `Die Anfrage nennt ${label} nicht. Wie lautet die Zahl?`;
+  if (family === 'ja') return `依頼に${label}がありません。数値はいくつですか？`;
+  return `O pedido não define ${label}. Qual é o número?`;
+}
+
+function checkNumbers(code, userText, defaults, locale) {
+  const prompts = [...promptNumbers(userText, locale), ...defaultNumbers(defaults, locale)];
   const used = [...String(code).matchAll(/\d+(?:\.\d+)?/g)].map((m) => Number(m[0]));
   const free = new Set([0, 1, 2, 100, 1000]);
   if (mentionsDuration(userText)) {
@@ -447,7 +470,12 @@ function checkNumbers(code, userText, defaults) {
     free.add(3600);
   }
   const foreign = [...new Set(used.filter((n) => !free.has(n) && !prompts.some((p) => related(n, p))))];
-  if (foreign.length) return { ok: false, error: `O código usou ${foreign.join(', ')}, e esse número não está no pedido. Troque pelo número escrito no pedido.` };
+  if (foreign.length) {
+    return {
+      ok: false,
+      error: foreignNumberAsk(foreign, locale),
+    };
+  }
   return { ok: true };
 }
 
@@ -479,6 +507,24 @@ function signalsAlarm(code) {
   return /action\s*:\s*["'](?:alert|buy|short)["']/.test(String(code || ''));
 }
 
+function codeHasNumber(code, n) {
+  return promptNumbers(code, 'en').some((value) => Math.abs(value - n) < 1e-6);
+}
+
+function chosenExitAsk(code, options) {
+  if (!options || options.guided) return '';
+  const stop = Number(options.stopPct);
+  const target = Number(options.tpPct);
+  if (options.exit === 'manual' && stop > 0 && target > 0 && (!codeHasNumber(code, stop) || !codeHasNumber(code, target))) {
+    return `O stop é ${stop}% e o alvo é ${target}% a partir da entrada. Escreva esses percentuais no buy.`;
+  }
+  const hold = Number(options.maxHoldMin);
+  if (options.timeExit && options.time === 'manual' && hold > 0 && !codeHasNumber(code, hold)) {
+    return `Feche a posição quando ctx.position.minutesHeld chegar a ${hold}.`;
+  }
+  return '';
+}
+
 function buildJsRecipe(data, userText, locale, options) {
   const ask = String(data.ask || '').trim();
   const questions = questionsOf(data);
@@ -489,8 +535,14 @@ function buildJsRecipe(data, userText, locale, options) {
     return { ask: 'Escreva function strategy(ctx) usando ctx.trades e ctx.book. Esses dados existem. Não recuse e não troque a regra por vela.', retry: true };
   }
   if (!code) return { ask: questions[0] || ask || 'Não fechou o código da estratégia.', questions, retry: !questions.length };
-  const numbers = checkNumbers(code, userText, defaults);
+  if (defaults.length) {
+    const missing = missingNumberAsk(defaults[0].label, locale);
+    return { ask: missing, questions: [missing], retry: false };
+  }
+  const numbers = checkNumbers(code, userText, defaults, locale);
   if (!numbers.ok) return { ask: numbers.error, retry: true };
+  const chosen = chosenExitAsk(code, options);
+  if (chosen) return { ask: chosen, retry: true };
   const alarm = !!(options && options.alarm);
   if (alarm && !signalsAlarm(code)) {
     return {

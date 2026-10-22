@@ -1,6 +1,6 @@
 const { parentPort } = require('worker_threads');
 const fs = require('fs');
-const { fitFiles } = require('./fit');
+const { fitFiles, fitCode } = require('./fit');
 
 const cache = new Map();
 
@@ -33,6 +33,11 @@ parentPort.on('message', (msg) => {
   try {
     if (msg.type === 'fit') {
       const fit = fitFiles(msg.files, msg.spec, msg.opts || {});
+      parentPort.postMessage({ id: msg.id, fit });
+      return;
+    }
+    if (msg.type === 'fit-js') {
+      const fit = fitCode(msg.files, msg.code, msg.opts || {});
       parentPort.postMessage({ id: msg.id, fit });
       return;
     }

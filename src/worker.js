@@ -250,6 +250,66 @@ async function saveRecipe(job, recipe, extra = {}) {
   return strategyId;
 }
 
+function historyHint(fit, stop, target, hold) {
+  const where = fit && fit.ok
+    ? `Busca em ${fit.n} ocorrências nas velas de ${fit.tfMin} min (${(fit.symbols || []).join(', ')}). Média líquida ${fit.avgPct}%.`
+    : 'Não houve ocorrências suficientes desse gatilho nas velas de 18 meses.';
+  const time = hold > 0 ? ` Feche quando ctx.position.minutesHeld chegar a ${hold}.` : ' Não feche a posição por tempo.';
+  return `${where} O arquivo de 18 meses não tem livro nem tape. Reescreva a mesma entrada. Stop ${stop}% e alvo ${target}% a partir da entrada.${time}`;
+}
+
+async function applyHistoryFit(job, result, messages) {
+  const options = (job.input || {}).options || {};
+  if (options.guided || options.historyApplied) return result;
+  const fitStop = options.exit === 'history';
+  const fitHold = !!(options.timeExit && options.time === 'history');
+  if (!fitStop && !fitHold) return result;
+  if (!result.recipe || !result.recipe.code) return result;
+  const fit = await lab.fitJsExits({
+    code: result.recipe.code,
+    fitStop,
+    fitHold,
+    stopPct: options.stopPct,
+    tpPct: options.tpPct,
+    maxHoldMin: options.maxHoldMin,
+  });
+  const stop = fit.ok && fitStop ? fit.stopPct : (options.exit === 'manual' ? Number(options.stopPct) : 1.2);
+  const target = fit.ok && fitStop ? fit.tpPct : (options.exit === 'manual' ? Number(options.tpPct) : suggestTp(stop));
+  const hold = options.timeExit && options.time === 'manual'
+    ? Number(options.maxHoldMin)
+    : (fit.ok && fitHold ? fit.maxHoldMin : 0);
+  const next = {
+    ...options,
+    guided: false,
+    historyApplied: true,
+    exit: (fitStop || options.exit === 'manual') ? 'manual' : options.exit,
+    stopPct: stop,
+    tpPct: target,
+    timeExit: hold > 0,
+    time: hold > 0 ? 'manual' : options.time,
+    maxHoldMin: hold || options.maxHoldMin,
+  };
+  const hint = historyHint(fit, stop, target, hold);
+  const shown = fit && fit.ok
+    ? `Busca em ${fit.n} ocorrências nas velas de ${fit.tfMin} min (${(fit.symbols || []).join(', ')}). Média líquida ${fit.avgPct}%. O arquivo de 18 meses não tem livro nem tape.`
+    : 'Não houve ocorrências suficientes desse gatilho nas velas de 18 meses. O arquivo de 18 meses não tem livro nem tape.';
+  const again = await completeRecipe({
+    messages,
+    locale: (job.input || {}).locale || 'pt-BR',
+    mode: (job.input || {}).mode === 'alarm' ? 'alarm' : 'trade',
+    options: next,
+    exitHint: hint,
+  });
+  if (again.recipe) {
+    const loc = (job.input || {}).locale || 'pt-BR';
+    const block = (again.recipe.explanation && (again.recipe.explanation[loc] || again.recipe.explanation.en)) || {};
+    block.exit = `${block.exit || ''} ${shown}`.trim();
+    block.risks = `${block.risks || ''} O arquivo de 18 meses é só de velas.`.trim();
+    again.recipe.explanation = { ...(again.recipe.explanation || {}), [loc]: block, en: { ...block } };
+  }
+  return again.recipe || again.ask ? again : result;
+}
+
 async function runJob(job) {
   const input = job.input || {};
   await pool.query(`UPDATE prompts SET status = 'running' WHERE job_id = $1 AND status = 'queued'`, [job.id]);
@@ -282,13 +342,15 @@ async function runJob(job) {
     current = found.rows[0]?.recipe || null;
   }
   const labContext = lab.contextForPrompt(messages.map((m) => m.content).join('\n'));
-  const result = await completeRecipe({
+  let result = await completeRecipe({
     messages,
     locale: input.locale || 'pt-BR',
     current,
     labContext,
     mode: input.mode === 'alarm' ? 'alarm' : 'trade',
+    options: input.options || null,
   });
+  result = await applyHistoryFit(job, result, messages);
   if (result.ask || (result.questions && result.questions.length)) {
     const questions = (result.questions && result.questions.length) ? result.questions : [result.ask];
     const ask = questions[0];

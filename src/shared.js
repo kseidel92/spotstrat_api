@@ -163,6 +163,88 @@ function deskAllowed(user) {
 const ALARM_SOUND_KINDS = new Set(['bell', 'harsh', 'vintage', 'digital', 'gentle', 'burst', 'beep', 'distant']);
 const ALARM_SOUND_LEGACY = { pulse: 'burst', chime: 'gentle', siren: 'harsh' };
 
+const NUMBER_WORDS = {
+  pt: [
+    ['cem', 100], ['sessenta', 60], ['cinquenta', 50], ['quarenta', 40], ['trinta', 30], ['vinte', 20],
+    ['quinze', 15], ['quatorze', 14], ['treze', 13], ['doze', 12], ['onze', 11], ['dez', 10],
+    ['nove', 9], ['oito', 8], ['sete', 7], ['seis', 6], ['cinco', 5], ['quatro', 4],
+    ['três', 3], ['tres', 3], ['duas', 2], ['dois', 2],
+  ],
+  en: [
+    ['hundred', 100], ['sixty', 60], ['fifty', 50], ['forty', 40], ['thirty', 30], ['twenty', 20],
+    ['fifteen', 15], ['twelve', 12], ['eleven', 11], ['ten', 10], ['nine', 9], ['eight', 8],
+    ['seven', 7], ['six', 6], ['five', 5], ['four', 4], ['three', 3], ['two', 2],
+  ],
+  es: [
+    ['cien', 100], ['sesenta', 60], ['cincuenta', 50], ['cuarenta', 40], ['treinta', 30], ['veinte', 20],
+    ['quince', 15], ['catorce', 14], ['trece', 13], ['doce', 12], ['once', 11], ['diez', 10],
+    ['nueve', 9], ['ocho', 8], ['siete', 7], ['seis', 6], ['cinco', 5], ['cuatro', 4], ['tres', 3], ['dos', 2],
+  ],
+  fr: [
+    ['cent', 100], ['soixante', 60], ['cinquante', 50], ['quarante', 40], ['trente', 30], ['vingt', 20],
+    ['quinze', 15], ['quatorze', 14], ['treize', 13], ['douze', 12], ['onze', 11], ['dix', 10],
+    ['neuf', 9], ['huit', 8], ['sept', 7], ['six', 6], ['cinq', 5], ['quatre', 4], ['trois', 3], ['deux', 2],
+  ],
+  de: [
+    ['hundert', 100], ['sechzig', 60], ['fünfzig', 50], ['fuenfzig', 50], ['vierzig', 40],
+    ['dreißig', 30], ['dreissig', 30], ['zwanzig', 20], ['fünfzehn', 15], ['fuenfzehn', 15],
+    ['zwölf', 12], ['zwoelf', 12], ['elf', 11], ['zehn', 10], ['neun', 9], ['acht', 8],
+    ['sieben', 7], ['sechs', 6], ['fünf', 5], ['fuenf', 5], ['vier', 4], ['drei', 3], ['zwei', 2],
+  ],
+  ja: [
+    ['九十', 90], ['八十', 80], ['七十', 70], ['六十', 60], ['五十', 50], ['四十', 40], ['三十', 30], ['二十', 20],
+    ['十', 10], ['九', 9], ['八', 8], ['七', 7], ['六', 6], ['五', 5], ['四', 4], ['三', 3], ['二', 2],
+  ],
+};
+
+function localeFamily(locale) {
+  const loc = String(locale || 'pt-BR');
+  if (/^pt/i.test(loc)) return 'pt';
+  if (/^es/i.test(loc)) return 'es';
+  if (/^fr/i.test(loc)) return 'fr';
+  if (/^de/i.test(loc)) return 'de';
+  if (/^ja/i.test(loc)) return 'ja';
+  return 'en';
+}
+
+function decimalStyle(locale) {
+  return /^(en|ja|es-MX)/i.test(String(locale || 'pt-BR')) ? 'dot' : 'comma';
+}
+
+function wordNumbers(text, locale) {
+  const found = [];
+  const lower = String(text || '').toLowerCase();
+  const ja = localeFamily(locale) === 'ja';
+  for (const [word, n] of NUMBER_WORDS[localeFamily(locale)] || []) {
+    const re = ja
+      ? new RegExp(`(?<![二三四五六七八九十])${word}(?:本|分|秒|回|個|(?![二三四五六七八九十]))`, 'u')
+      : new RegExp(`(?<![\\p{L}])${word}(?![\\p{L}])`, 'u');
+    if (re.test(lower)) found.push(n);
+  }
+  return found;
+}
+
+function promptNumbers(text, locale = 'pt-BR') {
+  const collapsed = String(text || '')
+    .replace(/QA\s*\d+/gi, ' ')
+    .replace(/(\d)[\s\u00a0\u202f](?=\d{3}(?!\d))/g, '$1');
+  const found = wordNumbers(collapsed, locale);
+  const style = decimalStyle(locale);
+  const re = style === 'dot'
+    ? /\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d+/g
+    : /\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+|\d+\.\d+|\d+/g;
+  for (const match of collapsed.matchAll(re)) {
+    const raw = match[0];
+    let n;
+    if (style === 'dot' && /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(raw)) n = Number(raw.replace(/,/g, ''));
+    else if (style === 'comma' && /^\d{1,3}(?:\.\d{3})+(?:,\d+)?$/.test(raw)) n = Number(raw.replace(/\./g, '').replace(',', '.'));
+    else if (raw.includes(',') && style === 'comma') n = Number(raw.replace(',', '.'));
+    else n = Number(raw.replace(/,/g, ''));
+    if (Number.isFinite(n)) found.push(n);
+  }
+  return [...new Set(found)];
+}
+
 function alarmSoundKind(raw) {
   const id = ALARM_SOUND_LEGACY[raw] || raw;
   return ALARM_SOUND_KINDS.has(id) ? id : 'bell';
@@ -188,4 +270,7 @@ module.exports = {
   publicUser,
   deskAllowed,
   alarmSoundKind,
+  promptNumbers,
+  localeFamily,
+  decimalStyle,
 };

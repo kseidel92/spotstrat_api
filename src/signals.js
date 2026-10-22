@@ -395,7 +395,24 @@ function decorateWant(recipe, want) {
 function scanRecipe(strategy, hub, mare, now, memory) {
   const recipe = strategy.recipe;
   const plan = recipe.plan || {};
-  if (recipe.code && plan.kind === 'js') return scanJs(strategy, hub, now, memory);
+  if (recipe.code && plan.kind === 'js') {
+    const mareMode = strategy.mare_mode || strategy.mareMode || 'any';
+    if (!mareAllows(mareMode, mare)) {
+      return { want: null, scan: [{ symbol: '—', passed: 0, total: 1, checks: [{ op: 'mare', pass: false, detail: `maré ${mare.label} bloqueia ${mareMode}` }] }] };
+    }
+    const hit = scanJs(strategy, hub, now, memory);
+    const filters = recipe.filters || [];
+    if (!hit.want || !filters.length) return hit;
+    const row = hub.getSymbol(hit.want.symbol);
+    if (!row) return { ...hit, want: null };
+    const checks = filters.map((op) => evalOp(op, { row, hub, now, mare }));
+    if (checks.every((item) => item.pass)) return hit;
+    return {
+      ...hit,
+      want: null,
+      scan: [...(hit.scan || []), { symbol: hit.want.symbol, passed: 0, total: checks.length, checks }],
+    };
+  }
   if (recipe.script && plan.kind === 'script') return scanScript(recipe, hub, now, memory || {});
   if (plan.kind === 'grid' || plan.kind === 'dca' || plan.kind === 'accum') {
     return {
