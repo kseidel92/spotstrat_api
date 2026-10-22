@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "smoke": "node scripts/smoke.mjs",
+    "check:asks": "node scripts/check-recipe-asks.mjs",
     "tunnel": "./cloudflare/run-quick.sh",
     "tunnel:stop": "./cloudflare/stop-tunnel.sh"
   },

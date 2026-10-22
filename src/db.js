@@ -263,6 +263,21 @@ CREATE TABLE IF NOT EXISTS research_artifacts (
   created_by uuid,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS strategy_help_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_email text NOT NULL,
+  user_name text,
+  strategy_id text,
+  strategy_name text,
+  message text NOT NULL,
+  locale text,
+  status text NOT NULL DEFAULT 'open',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS strategy_help_user_idx ON strategy_help_reports (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS strategy_help_status_idx ON strategy_help_reports (status, created_at DESC);
 `;
 
 async function migrate() {

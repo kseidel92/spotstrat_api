@@ -782,6 +782,44 @@ function createHttp(desk) {
     return res.status(202).json(job);
   });
 
+  app.post('/v1/strategies/help', auth, currentUser, requireDesk, async (req, res) => {
+    const message = String(req.body.message || '').trim().slice(0, 20000);
+    if (message.length < 8) {
+      return res.status(400).json({ error: 'invalid_message', message: 'Escreva com um pouco mais de detalhe o que está acontecendo.' });
+    }
+    let strategyId = req.body.strategyId ? String(req.body.strategyId).slice(0, 80) : null;
+    let strategyName = req.body.strategyName ? String(req.body.strategyName).slice(0, 120) : null;
+    if (strategyId) {
+      const found = await pool.query(
+        'SELECT id, name FROM strategies WHERE id = $1 AND user_id = $2',
+        [strategyId, req.user.id],
+      );
+      if (!found.rows[0]) {
+        return res.status(404).json({ error: 'not_found', message: 'Estratégia não encontrada.' });
+      }
+      strategyName = found.rows[0].name;
+    } else {
+      strategyId = null;
+      strategyName = strategyName || null;
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO strategy_help_reports
+         (user_id, user_email, user_name, strategy_id, strategy_name, message, locale)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, created_at, status`,
+      [
+        req.user.id,
+        req.profile?.email || req.user.email || '',
+        req.profile?.name || null,
+        strategyId,
+        strategyName,
+        message,
+        req.profile?.locale || req.body.locale || null,
+      ],
+    );
+    return res.status(201).json({ ok: true, report: rows[0] });
+  });
+
   app.post('/v1/alarms/:id/channels', auth, currentUser, requireDesk, async (req, res) => {
     const channels = cleanChannels(req.body || {});
     const updated = await pool.query(

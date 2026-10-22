@@ -461,15 +461,62 @@ function missingNumberAsk(label, locale) {
   return `O pedido não define ${label}. Qual é o número?`;
 }
 
+function lengthGuards(code) {
+  return [...String(code).matchAll(/\.length\s*(?:<|>|<=|>=)\s*(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
+}
+
+function impliedExitDefaults(userText) {
+  const stop = namedExitPct(userText, 'stop');
+  const target = namedExitPct(userText, 'target');
+  const out = [];
+  if (stop == null && target != null) out.push(DEFAULT_STOP_PCT);
+  if (target == null && stop != null) out.push(DEFAULT_TARGET_PCT);
+  if (stop == null && target == null && /\bstop\b/i.test(exitSection(userText)) && /\b(?:alvo|target)\b/i.test(exitSection(userText))) {
+    out.push(DEFAULT_STOP_PCT, DEFAULT_TARGET_PCT);
+  }
+  return out;
+}
+
+/** Números padrão do produto quando o pedido é qualitativo (média de volume, local, volatilidade). */
+function impliedEntryDefaults(userText) {
+  const body = String(userText || '');
+  const out = [];
+  const volChunk = (body.match(/volume[\s\S]{0,100}/i) || [''])[0];
+  if (/volume.{0,80}(?:acima da m[eé]dia|maior que a m[eé]dia|acima da media)/i.test(body)
+    && !/m[eé]dia(?:\s+(?:de|das?|dos?))?\s+\d+/i.test(volChunk)) {
+    const bars = body.match(/(?:pelo menos|faixa de|(?:[uú]ltimas?))\s+(\d+)\s+(?:candles?|velas?)/i);
+    out.push(bars ? Number(bars[1]) : 20);
+  }
+  if (/(?:m[ií]nima|m[aá]xima) local/i.test(body)
+    && !/(?:m[ií]nima|m[aá]xima) local[^\n\d]{0,40}\d+/i.test(body)) {
+    out.push(20);
+  }
+  if (/(?:volatilidade|contra[cç][aã]o de volatilidade)/i.test(body)
+    && !/\bATR\s*\(\s*\d+/i.test(body)
+    && !/(?:limite|threshold)[^\n\d]{0,20}\d+(?:[.,]\d+)?/i.test(body)) {
+    out.push(14, 20);
+  }
+  return out;
+}
+
 function checkNumbers(code, userText, defaults, locale) {
-  const prompts = [...promptNumbers(userText, locale), ...defaultNumbers(defaults, locale)];
+  const prompts = [
+    ...promptNumbers(userText, locale),
+    ...defaultNumbers(defaults, locale),
+    ...impliedExitDefaults(userText),
+    ...impliedEntryDefaults(userText),
+  ];
+  const guards = new Set(lengthGuards(code));
   const used = [...String(code).matchAll(/\d+(?:\.\d+)?/g)].map((m) => Number(m[0]));
   const free = new Set([0, 1, 2, 100, 1000]);
   if (mentionsDuration(userText)) {
     free.add(60);
     free.add(3600);
   }
-  const foreign = [...new Set(used.filter((n) => !free.has(n) && !prompts.some((p) => related(n, p))))];
+  const foreign = [...new Set(used.filter((n) => {
+    if (free.has(n) || prompts.some((p) => related(n, p))) return false;
+    return !(guards.has(n) && prompts.some((p) => n >= p && n <= p + 2));
+  }))];
   if (foreign.length) {
     return {
       ok: false,
@@ -511,6 +558,134 @@ function codeHasNumber(code, n) {
   return promptNumbers(code, 'en').some((value) => Math.abs(value - n) < 1e-6);
 }
 
+function sourceLine(text) {
+  const match = String(text || '').match(/^Fontes(?:\s+dispon[ií]veis[^:]*):\s*(.+)$/im)
+    || String(text || '').match(/^Fontes:\s*(.+)$/im);
+  return match ? match[1] : '';
+}
+
+/** Texto da regra sem a linha Fontes e sem avisos de laboratório que citam livro/tape como ausentes. */
+function ruleProse(text) {
+  let body = String(text || '');
+  body = body.replace(/^Fontes(?:\s+dispon[ií]veis[^:]*):.*$/gim, '');
+  body = body.replace(/^Fontes:.*$/gim, '');
+  body = body.replace(/[^.!\n]*(?:arquivo de 18 meses|esse arquivo [eé] s[oó] de velas)[^.!\n]*(?:livro|tape)[^.!\n]*[.!]?/gi, '');
+  body = body.replace(/[^.!\n]*\bn[aã]o tem livro[^.!\n]*[.!]?/gi, '');
+  body = body.replace(/[^.!\n]*\bsem livro[^.!\n]*[.!]?/gi, '');
+  return body;
+}
+
+function describesBook(prose) {
+  return /(?:\blivro\b|faixas do livro|primeiras(?:\s+\w+)?\s+faixas|desequil[ií]brio(?:\s+(?:comprador|vendedor|do\s+livro))?|ctx\.book|\bbids?\b|\basks?\b)/i.test(prose);
+}
+
+function describesTrades(prose) {
+  return /(?:trades?\s+agressiv|agress[aã]o(?:\s+compradora)?|aggTrades?|\btape\b|saldo (?:de )?trades|neg[oó]cios agressivos|fluxo(?:\s+de)?\s+agress|saldo comprador de trades)/i.test(prose);
+}
+
+function describesAverages(prose) {
+  const cleaned = String(prose || '').replace(/pre[cç]o m[eé]dio/gi, '');
+  return /(?:\bvwap\b|\brsi\b|\bsma\b|\bema\b|m[eé]dia(?:\s+m[oó]vel)?(?:\s+de\s+\d+)?|m[eé]dia das|acima da m[eé]dia|abaixo da m[eé]dia)/i.test(cleaned);
+}
+
+function returnAsk(code, userText) {
+  if (!/voltar at[eé]\s+\d/i.test(String(userText || ''))) return '';
+  const src = String(code || '');
+  const names = [...src.matchAll(/(?:const|let|var)\s+([A-Za-z_][\w]*)\s*=\s*Math\.abs\s*\(/g)].map((m) => m[1]);
+  const compares = (op) => {
+    const direct = new RegExp(`Math\\.abs\\s*\\([\\s\\S]{0,180}\\)\\s*(?:\\/\\s*[\\w.]+)?\\s*${op}`).test(src);
+    const named = names.some((name) => new RegExp(`\\b${name}\\b\\s*${op}`).test(src));
+    return direct || named;
+  };
+  if (compares('>') && compares('<=')) return '';
+  return 'Voltar até a porcentagem pedida só conta depois que o preço esteve mais longe que essa porcentagem. Grave essa saída em ctx.memory. Use Math.abs(preço - nível) / nível, maior que a porcentagem para a saída e menor ou igual para a volta. A vela que gravou o nível não é a volta. A compra continua na confirmação posterior que o pedido descreveu.';
+}
+
+function regionAsk(code, userText) {
+  const body = String(userText || '');
+  const touch = body.match(/pelo menos\s+(\d+|dois|duas|tr[eê]s|quatro|cinco)\s+vezes/i);
+  const bars = body.match(/[uú]ltimas\s+(\d+)\s+velas/i);
+  if (!touch || !bars) return '';
+  const words = { dois: 2, duas: 2, tres: 3, três: 3, quatro: 4, cinco: 5 };
+  const times = /^\d+$/.test(touch[1]) ? Number(touch[1]) : words[touch[1].toLowerCase()];
+  const window = Number(bars[1]);
+  if (!(times > 0) || !(window > 0)) return '';
+  const src = String(code || '');
+  const mentionsWindow = new RegExp(`\\b${window}\\b`).test(src) || new RegExp(`\\b${window + 1}\\b`).test(src);
+  const mentionsTimes = new RegExp(`\\b${times}\\b`).test(src);
+  const excludesSignal = /slice\(\s*0\s*,\s*-1\s*\)/.test(src) || new RegExp(`slice\\(\\s*-${window + 1}\\s*,\\s*-1\\s*\\)`).test(src);
+  const countsSignal = new RegExp(`slice\\(\\s*-${window}\\s*\\)`).test(src) && !excludesSignal;
+  if (mentionsWindow && mentionsTimes && !countsSignal) return '';
+  return `O suporte já está definido: região testada pelo menos ${times} vezes nas últimas ${window} velas anteriores ao candle do sinal. O nível é a ${times}ª mínima mais baixa dessas velas anteriores. O candle do sinal está na região quando a mínima dele alcança esse nível. Use ${times} e ${window}. Não conte o próprio sinal entre os testes e não invente distância em porcentagem.`;
+}
+
+function originCandleAsk(code, userText) {
+  const body = String(userText || '');
+  if (!/registrar|grave|grava/i.test(body)) return '';
+  const src = String(code || '');
+  const wipesAll = /Object\.keys\s*\(/.test(src) && /delete\s+/.test(src);
+  const keeps = /!==?\s*['"](?:used|done|seen|origins|originTimes)['"]/.test(src) || /\.(?:used|done|seen|origins|originTimes)\s*=/.test(src);
+  if (!wipesAll || keeps) return '';
+  return 'Não apague o time da vela que originou o nível. Guarde esse time numa lista ctx.memory.done que sobrevive ao prazo, ao cancelamento e à compra. A mesma vela não grava de novo.';
+}
+
+function bookCoverageAsk(code, userText) {
+  const prose = ruleProse(userText);
+  if (!describesBook(prose)) return '';
+  if (/ctx\.book\s*\(/.test(String(code || ''))) return '';
+  return 'O pedido descreve uma condição de livro. Leia ctx.book() e aplique essa condição, com os números que já estão no pedido. Não troque stop, alvo nem o gatilho.';
+}
+
+function tradesCoverageAsk(code, userText) {
+  const prose = ruleProse(userText);
+  if (!describesTrades(prose)) return '';
+  if (/ctx\.trades\s*\(/.test(String(code || ''))) return '';
+  return 'O pedido descreve trades agressivos. Leia ctx.trades na janela que o texto deu e aplique essa comparação. Não troque stop, alvo nem o gatilho.';
+}
+
+function averagesCoverageAsk(code, userText) {
+  const prose = ruleProse(userText);
+  if (!describesAverages(prose)) return '';
+  if (/ctx\.(sma|ema|vwap|rsi)\s*\(/.test(String(code || ''))) return '';
+  return 'O pedido cita média, VWAP ou RSI. Use ctx.sma, ctx.ema, ctx.vwap ou ctx.rsi com os períodos escritos. Não troque stop, alvo nem o gatilho.';
+}
+
+function reversalAsk(code, userText) {
+  if (!/revers[aã]o bullish|candle de revers[aã]o|vela de revers[aã]o|pin bar bullish/i.test(String(userText || ''))) return '';
+  const src = String(code || '');
+  const lowerVsBody = /Math\.min\s*\(\s*[\w.]+\.(?:open|close)\s*,\s*[\w.]+\.(?:open|close)\s*\)\s*-\s*[\w.]+\.low/.test(src)
+    || /[\w.]+\.low[\s\S]{0,120}(?:body|Math\.abs\s*\(\s*[\w.]+\.close\s*-\s*[\w.]+\.open)/.test(src)
+    || /(?:body|Math\.abs\s*\(\s*[\w.]+\.close\s*-\s*[\w.]+\.open)[\s\S]{0,120}[\w.]+\.low/.test(src);
+  const upperBound = /Math\.max\s*\(\s*[\w.]+\.(?:open|close)\s*,\s*[\w.]+\.(?:open|close)\s*\)/.test(src)
+    || /[\w.]+\.high[\s\S]{0,80}(?:body|Math\.abs)/.test(src)
+    || /(?:body|Math\.abs)[\s\S]{0,80}[\w.]+\.high/.test(src);
+  if (lowerVsBody && upperBound) return '';
+  return 'Candle de reversão bullish não é qualquer vela verde. Sem outro padrão no pedido, o pavio inferior tem pelo menos o tamanho do corpo, o pavio superior é menor que o corpo, e o fechamento fica acima da abertura. Corpo = Math.abs(close - open). Pavio inferior = Math.min(open, close) - low. Pavio superior = high - Math.max(open, close).';
+}
+
+function persistAggressionAsk(code, userText) {
+  const body = String(userText || '');
+  const entry = body.split(/\nSa[ií]da:/i)[0];
+  const match = entry.match(/por pelo menos\s+(\d+)\s+segundos?/i)
+    || entry.match(/(?:agress[aã]o|saldo comprador|press[aã]o compradora).{0,80}?\bpor\s+(\d+)\s+segundos?/i);
+  if (!match) return '';
+  const sec = Number(match[1]);
+  if (!(sec > 0)) return '';
+  const src = String(code || '');
+  if (!/ctx\.trades\s*\(/.test(src)) {
+    return `A agressão por pelo menos ${sec} segundos usa ctx.trades. Grave em ctx.memory o instante em que o saldo líquido ficou comprador e só registre quando essa condição durar ${sec} * 1000 milissegundos. Exemplo: if (liquido > 0) { if (m.since == null) m.since = ctx.now; } else delete m.since; if (m.since != null && ctx.now - m.since >= ${sec} * 1000) { /* registra */ }`;
+  }
+  const tracksStart = /(?:memory|m)\.\w+/i.test(src)
+    || /(?:memory|m)\[['\"][^'\"]+['\"]\]/i.test(src);
+  const checksDuration = /ctx\.now\s*-/.test(src) && (
+    new RegExp(`${sec}\\s*\\*\\s*1000`).test(src)
+    || new RegExp(`\\b${sec * 1000}\\b`).test(src)
+  );
+  const clearsOnFail = /delete\s+/.test(src);
+  if (tracksStart && checksDuration && clearsOnFail) return '';
+  return `Agressão por pelo menos ${sec} segundos exige persistência. Grave em ctx.memory o instante em que o saldo líquido ficou comprador. Só registre o preço médio quando ctx.now - m.since >= ${sec} * 1000 (ou >= ${sec * 1000}). Se o saldo deixar de ser comprador, delete esse instante. Uma leitura única de ctx.trades(${sec} * 1000) com saldo positivo não prova ${sec} segundos.`;
+}
+
 function chosenExitAsk(code, options) {
   if (!options || options.guided) return '';
   const stop = Number(options.stopPct);
@@ -525,6 +700,48 @@ function chosenExitAsk(code, options) {
   return '';
 }
 
+const DEFAULT_STOP_PCT = 0.8;
+const DEFAULT_TARGET_PCT = 1.2;
+
+function exitSection(text) {
+  const body = String(text || '');
+  const match = body.match(/\nSa[ií]da:\s*([\s\S]*)$/i);
+  return match ? match[1] : body;
+}
+
+function namedExitPct(text, kind) {
+  const section = exitSection(text);
+  if (kind === 'stop') {
+    // Não atravessar "alvo": "vender no stop, no alvo de 1,8%" não conta o 1,8% como stop.
+    const match = section.match(/\bstop\b(?:\s*(?:de|em|em\s+)?|\s+)(\d+(?:[.,]\d+)?)\s*%/i)
+      || section.match(/(\d+(?:[.,]\d+)?)\s*%\s*(?:de\s+)?(?:abaixo[^\n%]{0,20})?\bstop\b/i);
+    return match ? Number(String(match[1]).replace(',', '.')) : null;
+  }
+  const match = section.match(/\b(?:alvo|target|tp)\b(?:\s*(?:de|em)?|\s+)(\d+(?:[.,]\d+)?)\s*%/i)
+    || section.match(/(\d+(?:[.,]\d+)?)\s*%\s*(?:de\s+)?\b(?:alvo|target|tp)\b/i)
+    || section.match(/\bno alvo de\s+(\d+(?:[.,]\d+)?)\s*%/i);
+  return match ? Number(String(match[1]).replace(',', '.')) : null;
+}
+
+/** Quando a saída cita stop/alvo sem % e o outro lado já tem número, completa com o padrão do produto. */
+function partialExitDefaultAsk(question, userText) {
+  const stop = namedExitPct(userText, 'stop');
+  const target = namedExitPct(userText, 'target');
+  const q = String(question || '');
+  const asksStop = /\bstop\b/i.test(q);
+  const asksTarget = /\b(?:alvo|target|retorno)\b/i.test(q);
+  if (asksStop && stop == null && target != null) {
+    return `O alvo ${target}% já está no pedido. O stop sem porcentagem usa o padrão ${DEFAULT_STOP_PCT}%. Escreva o código com stop ${DEFAULT_STOP_PCT}% e alvo ${target}%. Declare no thesis que o stop veio do padrão porque o pedido não deu esse número.`;
+  }
+  if (asksTarget && target == null && stop != null) {
+    return `O stop ${stop}% já está no pedido. O alvo sem porcentagem usa o padrão ${DEFAULT_TARGET_PCT}%. Escreva o código com stop ${stop}% e alvo ${DEFAULT_TARGET_PCT}%. Declare no thesis que o alvo veio do padrão porque o pedido não deu esse número.`;
+  }
+  if (stop == null && target == null && /\bstop\b/i.test(exitSection(userText)) && /\b(?:alvo|target)\b/i.test(exitSection(userText))) {
+    return `Stop e alvo sem porcentagem usam o padrão ${DEFAULT_STOP_PCT}% e ${DEFAULT_TARGET_PCT}%. Escreva o código com esses percentuais e declare no thesis.`;
+  }
+  return '';
+}
+
 function buildJsRecipe(data, userText, locale, options) {
   const ask = String(data.ask || '').trim();
   const questions = questionsOf(data);
@@ -534,7 +751,32 @@ function buildJsRecipe(data, userText, locale, options) {
   if (!code && refusal.test(`${ask} ${questions.join(' ')}`)) {
     return { ask: 'Escreva function strategy(ctx) usando ctx.trades e ctx.book. Esses dados existem. Não recuse e não troque a regra por vela.', retry: true };
   }
-  if (!code) return { ask: questions[0] || ask || 'Não fechou o código da estratégia.', questions, retry: !questions.length };
+  if (!code) {
+    const question = questions[0] || ask || '';
+    if (/dist[aâ]ncia/i.test(question) && /pelo menos\s+\S+\s+vezes/i.test(userText)) {
+      const partial = partialExitDefaultAsk('stop', userText);
+      if (partial) {
+        return { ask: `O pedido já definiu o que é próximo e o suporte. Não peça distância. ${partial}`, retry: true };
+      }
+      return { ask: 'O pedido já definiu o que é próximo e o suporte. Não peça distância. Se o stop e o alvo em porcentagem não estiverem escritos, use o padrão 0,8% e 1,2%.', retry: true };
+    }
+    const partial = partialExitDefaultAsk(question, userText);
+    if (partial && /\b(?:stop|alvo|target|retorno)\b/i.test(question)) {
+      return { ask: partial, retry: true };
+    }
+    if (/m[eé]dia de volume|per[ií]odo.*volume|volume.*m[eé]dia|quantas velas.*volume/i.test(question) && /volume.{0,80}m[eé]dia|m[eé]dia.{0,40}volume/i.test(userText)) {
+      const bars = userText.match(/(?:pelo menos|faixa de|(?:[uú]ltimas?))\s+(\d+)\s+(?:candles?|velas?)/i);
+      const n = bars ? bars[1] : '20';
+      return { ask: `Não pergunte o período da média de volume. Use exatamente ${n} velas na média de volume. Declare no thesis. Escreva o código.`, retry: true };
+    }
+    if (/(?:m[ií]nima|m[aá]xima) local|quantas velas/i.test(question) && /(?:m[ií]nima|m[aá]xima) local/i.test(userText)) {
+      return { ask: 'Não pergunte quantas velas formam a mínima/máxima local. Use 20 velas do timeframe do sinal e declare no thesis. Escreva o código.', retry: true };
+    }
+    if (/limite.*volatilidade|volatilidade.*limite|valor limite/i.test(question) && /volatilidade|contra[cç][aã]o/i.test(userText)) {
+      return { ask: 'Não pergunte o limite absoluto. Use ATR(14) abaixo da média do ATR das 20 velas anteriores no timeframe do sinal (5m se o texto citar 5m). Declare no thesis. Escreva o código.', retry: true };
+    }
+    return { ask: question || 'Não fechou o código da estratégia.', questions, retry: !questions.length };
+  }
   if (defaults.length) {
     const missing = missingNumberAsk(defaults[0].label, locale);
     return { ask: missing, questions: [missing], retry: false };
@@ -543,6 +785,28 @@ function buildJsRecipe(data, userText, locale, options) {
   if (!numbers.ok) return { ask: numbers.error, retry: true };
   const chosen = chosenExitAsk(code, options);
   if (chosen) return { ask: chosen, retry: true };
+  const book = bookCoverageAsk(code, userText);
+  if (book) return { ask: book, retry: true };
+  const trades = tradesCoverageAsk(code, userText);
+  if (trades) return { ask: trades, retry: true };
+  const averages = averagesCoverageAsk(code, userText);
+  if (averages) return { ask: averages, retry: true };
+  const reversal = reversalAsk(code, userText);
+  if (reversal) return { ask: reversal, retry: true };
+  const persistAgg = persistAggressionAsk(code, userText);
+  if (persistAgg) return { ask: persistAgg, retry: true };
+  const returned = returnAsk(code, userText);
+  if (returned) return { ask: returned, retry: true };
+  const origin = originCandleAsk(code, userText);
+  if (origin) return { ask: origin, retry: true };
+  const region = regionAsk(code, userText);
+  if (region) return { ask: region, retry: true };
+  if (/pin bar bullish/i.test(userText) && !/close\s*>\s*[\w.]*open/.test(code)) {
+    return { ask: 'O pin bar bullish fecha acima da abertura. Mantenha o pavio inferior e o suporte já definidos.', retry: true };
+  }
+  if (/fechar abaixo/i.test(userText) && /\.time\s*>\s*ctx\.position\.openedAt/.test(code)) {
+    return { ask: 'A vela que fecha abaixo conta pelo instante de fechamento: time da vela mais a duração. A abertura pode ser anterior à entrada. Mantenha o resto.', retry: true };
+  }
   const alarm = !!(options && options.alarm);
   if (alarm && !signalsAlarm(code)) {
     return {
@@ -693,4 +957,5 @@ function decideJs(strategy, row, position, price, now, snap) {
 module.exports = {
   sma, ema, rsi, atr, bb, macd, stoch, vwap, highest, lowest, crossedUp,
   validateCode, checkNumbers, buildJsRecipe, writeStrategyFile, scanJs, decideJs, runCode, makeCtx,
+  returnAsk, regionAsk, bookCoverageAsk, tradesCoverageAsk, averagesCoverageAsk, reversalAsk, persistAggressionAsk,
 };

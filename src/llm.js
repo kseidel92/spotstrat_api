@@ -393,7 +393,7 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
   const extra = [
     current ? `Receita atual (mude só o que o usuário pediu): ${JSON.stringify(current)}` : '',
     labContext ? `Histórico antigo de preço, só vela. O ao vivo tem ctx.trades e ctx.book: ${labContext}` : '',
-    'Escreva function strategy(ctx) com os números do pedido. Use ctx.trades e ctx.book quando a regra falar de fluxo, tape, aggTrades ou livro. Se faltar um número necessário, não invente: deixe code vazio, deixe defaults vazio e faça uma pergunta.',
+    'Escreva function strategy(ctx) com os números do pedido. Use ctx.trades e ctx.book só quando Entrada, Lista ou Saída descreverem fluxo, tape, aggTrades ou livro. A linha Fontes sozinha não obriga filtro. Agressão por N segundos exige persistência em ctx.memory, não um único snapshot. Candle de reversão bullish exige pavio inferior >= corpo e pavio superior < corpo. Se faltar um número necessário, não invente: deixe code vazio, deixe defaults vazio e faça uma pergunta.',
     optionNote(options),
     exitHint || '',
     mode === 'alarm' ? ALARM_NOTE : '',
@@ -418,7 +418,7 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
     }
   }
   let settled = settle(data, { messages, locale, current, mode, options });
-  for (let fix = 0; fix < 2 && settled.retry; fix++) {
+  for (let fix = 0; fix < 4 && settled.retry; fix++) {
     try {
       const note = `${extra}\n${settled.ask}`;
       const again = provider === 'openai'
@@ -550,18 +550,42 @@ function guideKindOf(guide) {
   return 'touches';
 }
 
+function guideListOf(guide) {
+  const text = String(guide?.entry || '');
+  if (/compra no pr[oó]prio gatilho/i.test(text)) return { list: 'no', listText: '' };
+  const records = /\b(registrar|grave|grava(?:r)?)\b/i.test(text)
+    && /(n[ií]vel|pre[cç]o|m[aá]xima|m[ií]nima|refer[eê]ncia)/i.test(text);
+  const waitsConfirm = /sem comprar ainda|n[aã]o comprar ainda|aguardar.{0,40}confirma|vale por \d|valem por \d/i.test(text);
+  if (records || waitsConfirm) return { list: 'yes', listText: '' };
+  return { list: 'no', listText: '' };
+}
+
+function guideSourcesOf(guide, spec) {
+  const selected = Array.isArray(guide?.sources) ? guide.sources.filter(Boolean) : [];
+  const text = String(guide?.entry || '').toLowerCase();
+  const fromText = [];
+  if (/vela|candle|fechamento|m[aá]xima|m[ií]nima|romp/.test(text)) fromText.push('candles');
+  if (/m[eé]dia|vwap|rsi|\bema\b|\bsma\b/.test(text)) fromText.push('ema');
+  if (/livro|faixas|obi|bids?|asks?/.test(text)) fromText.push('book');
+  if (/agressiv|tape|aggtrade|trades?/.test(text)) fromText.push('trades');
+  const merged = [...new Set([...(spec.sources || []), ...fromText, ...selected])];
+  return merged.length ? merged : (spec.sources || ['candles']);
+}
+
 function suggestGuide(guide, step) {
   const kind = guideKindOf(guide || {});
   const spec = GUIDE_SPEC[kind] || GUIDE_SPEC.touches;
   const catalogued = !['pattern', 'cross', 'breakout', 'momentum'].includes(kind);
   const base = catalogued ? baseRecipe(kind) : null;
   const allowed = ['entry', 'entryType', 'sources', 'list', 'exit', 'review'];
+  const list = guideListOf(guide || {});
   return {
     step: allowed.includes(step) ? step : 'entry',
     kind,
     entryType: spec.entryType,
-    sources: spec.sources,
-    list: 'no',
+    sources: guideSourcesOf(guide || {}, spec),
+    list: list.list,
+    listText: list.listText,
     exitKind: 'numbers',
     stop: String(spec.stopPct ?? base.stopPct),
     target: String(spec.tpPct ?? base.tpPct),
