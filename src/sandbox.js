@@ -286,14 +286,23 @@ function makeCtx(row, now, position, memory) {
       return (row.bookSnaps || []).filter((snap) => snap.t >= cutoff).map(copyBook);
     },
     priceAgo(ms) {
+      const windowMs = Number(ms);
+      if (!(windowMs > 0)) return null;
+      const target = now - windowMs;
       const list = row.prices || [];
-      const target = now - Number(ms);
       let past = null;
       for (const point of list) {
         if (point.t <= target) past = point;
         else break;
       }
-      return past ? past.p : null;
+      if (past) return past.p;
+      const candles = bars(row, 1);
+      let close = null;
+      for (const candle of candles) {
+        if (candle.t <= target) close = candle.c;
+        else break;
+      }
+      return close > 0 ? close : null;
     },
     candles(tf) {
       const key = String(tf || '1m');
@@ -332,7 +341,7 @@ function runCode(code, ctx) {
   const result = script.runInContext(context, { timeout: 100 });
   if (!result || typeof result !== 'object') throw new Error('strategy(ctx) precisa devolver um objeto');
   const action = String(result.action || '');
-  if (!['buy', 'sell', 'hold', 'short', 'close'].includes(action)) throw new Error(`ação inválida: ${action || 'vazia'}`);
+  if (!['buy', 'sell', 'hold', 'short', 'close', 'alert'].includes(action)) throw new Error(`ação inválida: ${action || 'vazia'}`);
   return {
     action: action === 'close' ? 'sell' : action,
     stop: Number(result.stop) || 0,
@@ -404,8 +413,24 @@ function promptNumbers(text) {
   return [...new Set([...body.matchAll(/\d+(?:[.,]\d+)?/g)].map((m) => Number(m[0].replace(',', '.'))).filter((n) => Number.isFinite(n)))];
 }
 
+function mentionsDuration(text) {
+  return /\b(?:hora|minuto|min|segundo|seg|dia)s?\b|\d\s*h\b/i.test(String(text || ''));
+}
+
 function related(scriptNum, promptNum) {
-  const opts = [promptNum, promptNum + 1, promptNum / 100, promptNum * 60, promptNum * 1000, promptNum * 60000, 1 - promptNum / 100, 1 + promptNum / 100];
+  const opts = [
+    promptNum,
+    promptNum + 1,
+    promptNum / 100,
+    promptNum * 60,
+    promptNum * 3600,
+    promptNum * 1000,
+    promptNum * 60000,
+    promptNum * 3600000,
+    promptNum * 86400000,
+    1 - promptNum / 100,
+    1 + promptNum / 100,
+  ];
   return opts.some((v) => Math.abs(v - scriptNum) < 1e-6);
 }
 
@@ -417,6 +442,10 @@ function checkNumbers(code, userText, defaults) {
   const prompts = [...promptNumbers(userText), ...defaultNumbers(defaults)];
   const used = [...String(code).matchAll(/\d+(?:\.\d+)?/g)].map((m) => Number(m[0]));
   const free = new Set([0, 1, 2, 100, 1000]);
+  if (mentionsDuration(userText)) {
+    free.add(60);
+    free.add(3600);
+  }
   const foreign = [...new Set(used.filter((n) => !free.has(n) && !prompts.some((p) => related(n, p))))];
   if (foreign.length) return { ok: false, error: `O código usou ${foreign.join(', ')}, e esse número não está no pedido. Troque pelo número escrito no pedido.` };
   return { ok: true };
@@ -438,7 +467,19 @@ function defaultsOf(raw) {
   })).filter((item) => item.label && item.value).slice(0, 8);
 }
 
-function buildJsRecipe(data, userText, locale) {
+const NOTIFY_REFUSAL = /n[aã]o envi\w*|n[aã]o toc\w*|sem acesso|n[aã]o tem acesso|n[aã]o notifica|rede nem|n[aã]o consigo|s[oó] registra|devolve hold|ctx\.memory/i;
+
+function cleanAlarmText(text, fallback) {
+  const parts = String(text || '').split(/(?<=[.!?])\s+/).filter((part) => part.trim() && !NOTIFY_REFUSAL.test(part));
+  const joined = parts.join(' ').trim();
+  return joined || fallback;
+}
+
+function signalsAlarm(code) {
+  return /action\s*:\s*["'](?:alert|buy|short)["']/.test(String(code || ''));
+}
+
+function buildJsRecipe(data, userText, locale, options) {
   const ask = String(data.ask || '').trim();
   const questions = questionsOf(data);
   const defaults = defaultsOf(data.defaults);
@@ -450,6 +491,20 @@ function buildJsRecipe(data, userText, locale) {
   if (!code) return { ask: questions[0] || ask || 'Não fechou o código da estratégia.', questions, retry: !questions.length };
   const numbers = checkNumbers(code, userText, defaults);
   if (!numbers.ok) return { ask: numbers.error, retry: true };
+  const alarm = !!(options && options.alarm);
+  if (alarm && !signalsAlarm(code)) {
+    return {
+      ask: 'Quando a condição for verdadeira, devolva { action: "alert", stop, target }. hold só quando ainda não aconteceu. O som e o e-mail o desk envia. Não escreva que o código não notifica.',
+      retry: true,
+    };
+  }
+  if (alarm) {
+    const fallback = 'Quando a condição acontece, o aviso sai no som e no e-mail marcados. A ordem continua sua.';
+    data.thesis = cleanAlarmText(data.thesis, fallback);
+    data.entryText = cleanAlarmText(data.entryText, data.thesis);
+    data.exitText = cleanAlarmText(data.exitText, 'A ordem continua sua.');
+    data.risks = cleanAlarmText(data.risks, 'Paper. O aviso não abre ordem.');
+  }
   const ran = validateCode(code);
   if (!ran.ok) return { ask: `O código quebrou na validação: ${ran.error}`, retry: true };
   const text = {
@@ -511,7 +566,9 @@ function keepMemory(snap, symbol, beforeJson, after) {
 
 function scanJs(strategy, hub, now, snap) {
   const code = readStrategyCode(strategy.id, strategy.recipe.code);
+  const alarm = !!strategy.alarm;
   const scans = [];
+  const hits = [];
   let best = null;
   for (const symbol of hub.tradeSymbols || []) {
     const row = hub.getSymbol(symbol);
@@ -528,14 +585,15 @@ function scanJs(strategy, hub, now, snap) {
       continue;
     }
     const action = result.action;
-    const ok = action === 'buy' || action === 'short';
+    const ok = action === 'buy' || action === 'short' || (alarm && action === 'alert');
     scans.push({ symbol, passed: ok ? 1 : 0, total: 1, checks: [{ op: 'js', pass: ok, detail: ok ? action : 'sem entrada' }] });
-    if (!ok || best) continue;
+    if (!ok) continue;
+    if (!alarm && best) continue;
     const side = action === 'short' ? 'short' : 'long';
     const stopOk = !(result.stop > 0) || (side === 'short' ? result.stop > row.price : result.stop < row.price);
     const targetOk = !(result.target > 0) || (side === 'short' ? result.target < row.price : result.target > row.price);
-    if (!stopOk || !targetOk) continue;
-    best = {
+    if (!alarm && (!stopOk || !targetOk)) continue;
+    const hit = {
       symbol,
       entry: row.price,
       stop: result.stop > 0 ? result.stop : 0,
@@ -549,10 +607,15 @@ function scanJs(strategy, hub, now, snap) {
       noRepeatMin: 15,
       stopCooldownMin: 30,
       rule: 'js',
-      reason: 'código da estratégia',
+      reason: alarm ? 'condição do alarme' : 'código da estratégia',
     };
-    break;
+    if (alarm) hits.push(hit);
+    else {
+      best = hit;
+      break;
+    }
   }
+  if (alarm) return { want: hits[0] || null, wants: hits, scan: scans.slice(0, 6) };
   return { want: best, scan: scans.slice(0, 6) };
 }
 

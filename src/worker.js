@@ -1,6 +1,6 @@
 const { pool } = require('./db');
 const { completeRecipe } = require('./llm');
-const { id, emptySnap, walletOf, netRR, MIN_NET_RR, validateRecipe } = require('./shared');
+const { id, emptySnap, walletOf, netRR, MIN_NET_RR, validateRecipe, alarmSoundKind } = require('./shared');
 const { writeStrategyFile } = require('./sandbox');
 const lab = require('./lab');
 const bus = require('./bus');
@@ -287,6 +287,7 @@ async function runJob(job) {
     locale: input.locale || 'pt-BR',
     current,
     labContext,
+    mode: input.mode === 'alarm' ? 'alarm' : 'trade',
   });
   if (result.ask || (result.questions && result.questions.length)) {
     const questions = (result.questions && result.questions.length) ? result.questions : [result.ask];
@@ -333,9 +334,12 @@ async function runJob(job) {
 
 function channelsOf(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
+  const volume = Number(src.volume);
   const channels = {
     sound: src.sound !== false,
     email: !!src.email,
+    soundKind: alarmSoundKind(src.soundKind),
+    volume: Number.isFinite(volume) ? Math.min(1, Math.max(0.05, volume)) : 0.85,
   };
   if (!channels.sound && !channels.email) channels.sound = true;
   return channels;
@@ -352,7 +356,7 @@ async function saveAlarm(job, recipe) {
     [alarmId, job.user_id, recipe.name, JSON.stringify(recipe), JSON.stringify(recipe.explanation), JSON.stringify(channels)],
   );
   const summary = text
-    ? `Alarme ${recipe.name}. ${text.thesis} Se disparar: stop ${recipe.exit.stopPct}% e alvo ${recipe.exit.tpPct}%. A ordem continua sua.`
+    ? `Alarme ${recipe.name}. ${text.thesis} Quando disparar, o aviso sai no som e no e-mail marcados. A ordem continua sua.`
     : `Alarme ${recipe.name}.`;
   await say(job.thread_id, summary, recipe);
   return alarmId;

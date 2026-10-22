@@ -160,6 +160,14 @@ function deskAllowed(user) {
   return user.desk === 'trial' || user.desk === 'paper' || user.desk === 'pro';
 }
 
+const ALARM_SOUND_KINDS = new Set(['bell', 'harsh', 'vintage', 'digital', 'gentle', 'burst', 'beep', 'distant']);
+const ALARM_SOUND_LEGACY = { pulse: 'burst', chime: 'gentle', siren: 'harsh' };
+
+function alarmSoundKind(raw) {
+  const id = ALARM_SOUND_LEGACY[raw] || raw;
+  return ALARM_SOUND_KINDS.has(id) ? id : 'bell';
+}
+
 module.exports = {
   INITIAL,
   TAKER,
@@ -179,4 +187,5 @@ module.exports = {
   validateRecipe,
   publicUser,
   deskAllowed,
+  alarmSoundKind,
 };

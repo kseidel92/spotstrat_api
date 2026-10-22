@@ -140,6 +140,7 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS alarm_hits_open_idx ON alarm_hits (alarm_id, symbol) WHERE cleared_at IS NULL;
 CREATE INDEX IF NOT EXISTS alarm_hits_email_day_idx ON alarm_hits (user_id, email_sent_at);
 ALTER TABLE alarms ADD COLUMN IF NOT EXISTS channels jsonb NOT NULL DEFAULT '{"sound":true,"email":false,"sms":false}'::jsonb;
+ALTER TABLE alarms ADD COLUMN IF NOT EXISTS memory jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_tier text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS cancel_requested_at timestamptz;

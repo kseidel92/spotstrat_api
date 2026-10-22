@@ -1,6 +1,6 @@
 const { pool } = require('./db');
 const { evaluateStrategy } = require('./signals');
-const { emptySnap, brtDay, sizeQuote, TAKER, MAKER, INITIAL } = require('./shared');
+const { emptySnap, brtDay, sizeQuote, TAKER, MAKER, INITIAL, alarmSoundKind } = require('./shared');
 const { applyExit } = require('./faithful');
 const { decideScript, markFill } = require('./script');
 const { decideJs } = require('./sandbox');
@@ -19,6 +19,7 @@ function createDesk(hub) {
   let timer = null;
   let lastScan = 0;
   let alarmScanAt = 0;
+  let ready = false;
 
   async function loadAll() {
     const { rows: userRows } = await pool.query('SELECT id, mare_prefs, plan_status, plan_tier, trial_ends_at, email_verified_at, phone_verified_at, google_sub FROM users');
@@ -55,12 +56,28 @@ function createDesk(hub) {
     await loadAlarmEpisodes();
   }
 
+  function hydrateAlarm(row) {
+    const prev = alarmRuns.find((item) => item.id === row.id);
+    if (!row.memory || typeof row.memory !== 'object' || Array.isArray(row.memory)) row.memory = {};
+    if (prev?.dirty && prev.memory) {
+      row.memory = prev.memory;
+      row.dirty = true;
+    }
+    return row;
+  }
+
   async function loadAlarms(userId) {
     const q = userId
       ? await pool.query('SELECT * FROM alarms WHERE user_id = $1', [userId])
       : await pool.query('SELECT * FROM alarms');
-    if (!userId) alarmRuns = q.rows;
-    else alarmRuns = alarmRuns.filter((row) => row.user_id !== userId).concat(q.rows);
+    const rows = q.rows.map(hydrateAlarm);
+    if (!userId) alarmRuns = rows;
+    else alarmRuns = alarmRuns.filter((row) => row.user_id !== userId).concat(rows);
+  }
+
+  async function persistAlarm(alarm) {
+    await pool.query('UPDATE alarms SET memory = $2::jsonb WHERE id = $1', [alarm.id, JSON.stringify(alarm.memory || {})]);
+    alarm.dirty = false;
   }
 
   async function loadAlarmEpisodes() {
@@ -74,7 +91,7 @@ function createDesk(hub) {
 
   async function alarmEmailRoom(userId) {
     const { rows } = await pool.query(
-      `SELECT count(*)::int AS n
+      `SELECT count(DISTINCT alarm_id)::int AS n
        FROM alarm_hits
        WHERE user_id = $1
          AND email_sent_at >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'
@@ -586,6 +603,7 @@ function createDesk(hub) {
   }
 
   async function tick() {
+    if (!ready) return;
     const now = Date.now();
     const focused = bus.focused ? bus.focused() : new Set();
     for (const run of runners.values()) {
@@ -649,6 +667,9 @@ function createDesk(hub) {
       for (const run of runners.values()) {
         if (run.dirty) persist(run).catch(() => {});
       }
+      for (const alarm of alarmRuns) {
+        if (alarm.dirty) persistAlarm(alarm).catch(() => {});
+      }
     }
   }
 
@@ -658,68 +679,73 @@ function createDesk(hub) {
       if (!userActive(alarm.user_id)) continue;
       try {
         const mare = hub.mareFor({});
-        const evaluated = evaluateStrategy({ type: 'recipe', recipe: alarm.recipe, mare_mode: 'any' }, hub, mare);
-        const open = alarmLive.get(alarm.id);
-        if (!evaluated.want) {
-          if (open?.size) {
-            await pool.query(`UPDATE alarm_hits SET cleared_at = now() WHERE alarm_id = $1 AND cleared_at IS NULL`, [alarm.id]);
-            alarmLive.delete(alarm.id);
-          }
-          continue;
-        }
-        const want = evaluated.want;
-        if (open?.has(want.symbol)) continue;
-        if (open?.size) {
+        if (!alarm.memory || typeof alarm.memory !== 'object' || Array.isArray(alarm.memory)) alarm.memory = {};
+        const snap = { jsMemory: alarm.memory };
+        const evaluated = evaluateStrategy({ type: 'recipe', alarm: true, recipe: alarm.recipe, mare_mode: 'any' }, hub, mare, snap);
+        if (snap.touched) alarm.dirty = true;
+        const wants = Array.isArray(evaluated.wants) ? evaluated.wants : (evaluated.want ? [evaluated.want] : []);
+        const live = new Set(wants.map((item) => item.symbol));
+        const open = alarmLive.get(alarm.id) || new Set();
+        const wasFiring = open.size > 0;
+        let changed = false;
+        for (const symbol of [...open]) {
+          if (live.has(symbol)) continue;
           await pool.query(
-            `UPDATE alarm_hits SET cleared_at = now() WHERE alarm_id = $1 AND symbol <> $2 AND cleared_at IS NULL`,
-            [alarm.id, want.symbol],
+            `UPDATE alarm_hits SET cleared_at = now() WHERE alarm_id = $1 AND symbol = $2 AND cleared_at IS NULL`,
+            [alarm.id, symbol],
           );
+          open.delete(symbol);
+          changed = true;
         }
-        const stopPct = ((want.entry - want.stop) / want.entry) * 100;
-        const tpPct = ((want.tp - want.entry) / want.entry) * 100;
-        const inserted = await pool.query(
-          `INSERT INTO alarm_hits (alarm_id, user_id, symbol, price, stop, tp, stop_pct, tp_pct, reason)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT (alarm_id, symbol) WHERE cleared_at IS NULL DO NOTHING
-           RETURNING id, symbol, price, stop, tp, stop_pct, tp_pct, reason, created_at`,
-          [alarm.id, alarm.user_id, want.symbol, want.entry, want.stop, want.tp, stopPct, tpPct, want.reason || alarm.name],
-        );
-        if (!inserted.rows[0]) {
-          if (!alarmLive.has(alarm.id)) alarmLive.set(alarm.id, new Set());
-          alarmLive.get(alarm.id).add(want.symbol);
-          continue;
+        let firstHit = null;
+        for (const want of wants) {
+          if (open.has(want.symbol)) continue;
+          const inserted = await pool.query(
+            `INSERT INTO alarm_hits (alarm_id, user_id, symbol, price, stop, tp, stop_pct, tp_pct, reason)
+             VALUES ($1,$2,$3,$4,$5,$6,0,0,$7)
+             ON CONFLICT (alarm_id, symbol) WHERE cleared_at IS NULL DO NOTHING
+             RETURNING id`,
+            [alarm.id, alarm.user_id, want.symbol, want.entry, want.entry, want.entry, want.reason || alarm.name],
+          );
+          open.add(want.symbol);
+          changed = true;
+          if (!firstHit && inserted.rows[0]) firstHit = inserted.rows[0].id;
         }
-        if (!alarmLive.has(alarm.id)) alarmLive.set(alarm.id, new Set());
-        alarmLive.get(alarm.id).add(want.symbol);
-        const row = inserted.rows[0];
-        const deliveries = await deliverAlarm(
-          alarm,
-          row.id,
-          `${alarm.name} em ${want.symbol}. Preço ${Number(want.entry).toFixed(4)}. Stop ${Number(want.stop).toFixed(4)}. Alvo ${Number(want.tp).toFixed(4)}. A ordem continua sua.`,
-        );
+        if (!open.size) alarmLive.delete(alarm.id);
+        else alarmLive.set(alarm.id, open);
+        if (!changed) continue;
+        const symbols = wants.filter((item) => open.has(item.symbol)).map((item) => ({
+          symbol: item.symbol,
+          price: Number(item.entry),
+        }));
+        const started = !wasFiring && open.size > 0;
+        let deliveries = [];
+        if (started) {
+          const recent = await pool.query(
+            `SELECT 1 FROM alarm_hits WHERE alarm_id = $1 AND email_sent_at > now() - interval '30 minutes' LIMIT 1`,
+            [alarm.id],
+          );
+          if (!recent.rows.length) {
+            const names = symbols.map((item) => String(item.symbol).replace(/USDT$/, '')).join(', ');
+            deliveries = await deliverAlarm(
+              alarm,
+              firstHit,
+              `${alarm.name}. ${names}. A ordem continua sua.`,
+            );
+            console.log(`[alarm] ${alarm.name} ${names}`);
+          }
+        }
         bus.emit('push', {
           userId: alarm.user_id,
           msg: {
             type: 'alarm',
-            hit: {
-              id: row.id,
-              alarmId: alarm.id,
-              name: alarm.name,
-              symbol: row.symbol,
-              price: Number(row.price),
-              stop: Number(row.stop),
-              tp: Number(row.tp),
-              stopPct: Number(row.stop_pct),
-              tpPct: Number(row.tp_pct),
-              reason: row.reason,
-              createdAt: row.created_at,
-              seen: false,
-              channels: alarm.channels || { sound: true, email: false },
-              deliveries,
-            },
+            alarmId: alarm.id,
+            name: alarm.name,
+            symbols,
+            channels: publicChannels(alarm.channels),
+            deliveries,
           },
         });
-        console.log(`[alarm] ${alarm.name} ${want.symbol} stop ${stopPct.toFixed(2)}% alvo ${tpPct.toFixed(2)}%`);
       } catch (err) {
         console.error('[alarm]', alarm.id, err.message);
       }
@@ -781,6 +807,15 @@ function createDesk(hub) {
     }
     const user = users.get(userId);
     const alarmRows = alarmRuns.filter((row) => row.user_id === userId);
+    const openHits = await pool.query(
+      `SELECT alarm_id, symbol, price FROM alarm_hits WHERE user_id = $1 AND cleared_at IS NULL ORDER BY created_at`,
+      [userId],
+    );
+    const symbolsOf = new Map();
+    for (const row of openHits.rows) {
+      if (!symbolsOf.has(row.alarm_id)) symbolsOf.set(row.alarm_id, []);
+      symbolsOf.get(row.alarm_id).push({ symbol: row.symbol, price: Number(row.price) });
+    }
     const hits = await pool.query(
       `SELECT h.id, h.alarm_id, h.symbol, h.price, h.stop, h.tp, h.stop_pct, h.tp_pct, h.reason, h.seen_at, h.created_at, a.name, a.channels
        FROM alarm_hits h JOIN alarms a ON a.id = h.alarm_id
@@ -797,9 +832,8 @@ function createDesk(hub) {
         name: row.name,
         status: row.status,
         thesis: (row.explanation?.['pt-BR'] || row.explanation?.en || {}).thesis || row.name,
-        stopPct: row.recipe?.exit?.stopPct,
-        tpPct: row.recipe?.exit?.tpPct,
-        channels: row.channels || { sound: true, email: false },
+        channels: publicChannels(row.channels),
+        symbols: symbolsOf.get(row.id) || [],
       })),
       hits: hits.rows.map((row) => ({
         id: row.id,
@@ -827,7 +861,10 @@ function createDesk(hub) {
   }
 
   function start() {
-    loadAll().then(() => console.log(`[desk] ${runners.size} estratégias reidratadas`)).catch((err) => console.error('[desk] load', err));
+    loadAll().then(() => {
+      ready = true;
+      console.log(`[desk] ${runners.size} estratégias reidratadas`);
+    }).catch((err) => console.error('[desk] load', err));
     timer = setInterval(() => { tick().catch((err) => console.error('[desk] tick', err)); }, 1000);
     setInterval(() => {
       for (const userId of users.keys()) {
@@ -841,7 +878,21 @@ function createDesk(hub) {
 
   function stop() {
     clearInterval(timer);
-    return Promise.all([...runners.values()].filter((r) => r.dirty).map(persist));
+    return Promise.all([
+      ...[...runners.values()].filter((r) => r.dirty).map(persist),
+      ...alarmRuns.filter((alarm) => alarm.dirty).map(persistAlarm),
+    ]);
+  }
+
+  function publicChannels(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const volume = Number(src.volume);
+    return {
+      sound: src.sound !== false,
+      email: !!src.email,
+      soundKind: alarmSoundKind(src.soundKind),
+      volume: Number.isFinite(volume) ? Math.min(1, Math.max(0.05, volume)) : 0.85,
+    };
   }
 
   async function deliverAlarm(alarm, hitId, text) {
@@ -855,7 +906,7 @@ function createDesk(hub) {
         deliveries.push({ channel: 'email', status: 'capped', to: email });
       } else {
         const notice = await pushNotice('email', email, text, `Alarme SpotStrat · ${alarm.name}`);
-        if (notice.status === 'sent') {
+        if (hitId && notice.status === 'sent') {
           await pool.query(`UPDATE alarm_hits SET email_sent_at = now() WHERE id = $1`, [hitId]);
         }
         deliveries.push(notice);

@@ -204,7 +204,7 @@ function unaskedEma(text, recipe) {
   return !/ema|m[eé]dia m[oó]vel/i.test(text);
 }
 
-function settle(data, { messages, locale, current }) {
+function settle(data, { messages, locale, current, mode }) {
   const users = (messages || []).filter((m) => m.role === 'user');
   const last = users[users.length - 1];
   const lastText = (last && last.content) || '';
@@ -216,7 +216,7 @@ function settle(data, { messages, locale, current }) {
     return { ask: 'Não achei o gatilho. Diz o movimento e a janela, por exemplo: sobe 1% em 3 minutos.' };
   }
   if (refusesSwap(lastText)) return { ask: 'Não crio uma estratégia diferente da que você descreveu.' };
-  if (data.code || data.ask || (Array.isArray(data.questions) && data.questions.length)) return buildJsRecipe(data, blob, locale);
+  if (data.code || data.ask || (Array.isArray(data.questions) && data.questions.length)) return buildJsRecipe(data, blob, locale, { alarm: mode === 'alarm' });
   return recipeFromModel(data, blob, locale);
 }
 
@@ -354,8 +354,16 @@ function vagueAsk(result) {
   return result && result.ask && /Não achei o gatilho|Descreve o gatilho/.test(result.ask);
 }
 
-async function completeRecipe({ messages, locale, current, labContext }) {
-  const local = settle(null, { messages, locale, current });
+const ALARM_NOTE = [
+  'Este pedido é um alarme. A pessoa já marcou som, e-mail ou os dois. Isso não é trabalho do código.',
+  'O desk toca o som e manda o e-mail quando strategy devolve { action: "alert", stop, target }.',
+  'hold só quando a condição ainda não aconteceu. Se a condição for verdadeira e o código devolver hold, ninguém ouve o aviso.',
+  'Não escreva no thesis, no risks nem no código que o aviso não sai, que não há rede ou que a estratégia não notifica.',
+  'alert não abre ordem. A ordem continua com a pessoa.',
+].join('\n');
+
+async function completeRecipe({ messages, locale, current, labContext, mode }) {
+  const local = settle(null, { messages, locale, current, mode });
   const openai = secret('OPENAI_API_KEY');
   const anthropic = secret('ANTHROPIC_API_KEY');
   const provider = openai ? 'openai' : anthropic ? 'anthropic' : '';
@@ -364,6 +372,7 @@ async function completeRecipe({ messages, locale, current, labContext }) {
     current ? `Receita atual (mude só o que o usuário pediu): ${JSON.stringify(current)}` : '',
     labContext ? `Histórico antigo de preço, só vela. O ao vivo tem ctx.trades e ctx.book: ${labContext}` : '',
     'Escreva function strategy(ctx) com os números do pedido. Use ctx.trades e ctx.book quando a regra falar de fluxo, tape, aggTrades ou livro. Se faltar número, crie com um padrão em defaults. Não recuse.',
+    mode === 'alarm' ? ALARM_NOTE : '',
   ].filter(Boolean).join('\n');
   let data = null;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -384,14 +393,14 @@ async function completeRecipe({ messages, locale, current, labContext }) {
       if (attempt === 1) data = null;
     }
   }
-  let settled = settle(data, { messages, locale, current });
+  let settled = settle(data, { messages, locale, current, mode });
   for (let fix = 0; fix < 2 && settled.retry; fix++) {
     try {
       const note = `${extra}\n${settled.ask}`;
       const again = provider === 'openai'
         ? await callOpenAI({ messages, locale, extra: note })
         : await callAnthropic({ messages, locale, extra: note });
-      const second = settle(again, { messages, locale, current });
+      const second = settle(again, { messages, locale, current, mode });
       if (second.recipe || (second.ask && !vagueAsk(second))) settled = second;
     } catch (err) {
       console.error('[llm]', err.message);

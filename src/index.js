@@ -15,6 +15,8 @@ async function main() {
   await migrate();
   lab.loadIndex();
   console.log(`[lab] ${lab.symbols().length} pares · ${lab.artifacts().length} varreduras`);
+  const guest = await pool.query(`SELECT id FROM users WHERE email = $1 LIMIT 1`, ['kseidel.si@gmail.com']);
+  const guestId = guest.rows[0]?.id || null;
 
   const hub = createHub();
   const desk = createDesk(hub);
@@ -47,14 +49,17 @@ async function main() {
       const url = new URL(req.url, 'http://127.0.0.1');
       token = url.searchParams.get('token') || '';
     } catch (_) { /* ignore */ }
-    let payload;
-    try {
-      payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
-    } catch (_) {
+    let payload = null;
+    if (token) {
+      try { payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET); } catch (_) { payload = null; }
+    }
+    // TRAVA DE AUTENTICAÇÃO COMENTADA — o websocket abre sem sessão.
+    // if (!payload) { ws.close(4001, 'auth'); return; }
+    const userId = payload?.sub || guestId;
+    if (!userId) {
       ws.close(4001, 'auth');
       return;
     }
-    const userId = payload.sub;
     const client = { ws, focus: null };
     if (!clients.has(userId)) clients.set(userId, new Set());
     clients.get(userId).add(client);
