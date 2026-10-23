@@ -59,6 +59,17 @@ Modelo de config manual: `config.yml.example`.
 
 ## Ordem ao ligar o notebook
 
+**Recomendado (um comando):**
+
+```bash
+cd ~/projects/spotstrat_api   # ou tradeai/apis
+npm run online               # Postgres + API + túnel + push Vercel se a URL mudou
+npm run online:front         # idem + Vite :7172
+npm run online:watch         # fica religando API/túnel se cair (~20s)
+```
+
+Manual:
+
 1. Postgres (Docker)
 2. `npm start` (API **7171**)
 3. `./cloudflare/run-quick.sh` **ou** `./cloudflare/run-token.sh`
