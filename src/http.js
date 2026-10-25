@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
@@ -14,6 +13,7 @@ const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = 
 const { notifyOwner, sendVerifyCode, sendResetCode } = require('./mail');
 const { suggestGuide } = require('./llm');
 const { mountAdmin } = require('./admin');
+const stripeBilling = require('./stripeBilling');
 
 const hits = new Map();
 
@@ -203,27 +203,21 @@ function createHttp(desk) {
     credentials: true,
   }));
   app.post('/v1/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-    const secret = (process.env.STRIPE_WEBHOOK_SECRET || '').trim();
-    if (!secret) return res.status(503).json({ error: 'stripe_off' });
-    const header = req.headers['stripe-signature'] || '';
-    const t = (header.match(/t=(\d+)/) || [])[1];
-    const v1 = (header.match(/v1=([a-f0-9]+)/) || [])[1];
-    const expect = crypto.createHmac('sha256', secret).update(`${t}.${req.body.toString('utf8')}`).digest('hex');
-    if (!t || !v1 || v1.length !== expect.length || !crypto.timingSafeEqual(Buffer.from(v1), Buffer.from(expect))) {
-      return res.status(400).json({ error: 'bad_signature' });
+    try {
+      const result = await stripeBilling.handleWebhook(
+        req.body,
+        req.headers['stripe-signature'] || '',
+        desk,
+      );
+      return res.json({ received: true, ...result });
+    } catch (err) {
+      if (err.code === 'stripe_off') return res.status(503).json({ error: 'stripe_off' });
+      if (err.type === 'StripeSignatureVerificationError' || /signature/i.test(err.message || '')) {
+        return res.status(400).json({ error: 'bad_signature' });
+      }
+      console.error('[stripe webhook]', err.message);
+      return res.status(500).json({ error: 'webhook_fail', message: err.message });
     }
-    const event = JSON.parse(req.body.toString('utf8'));
-    const type = event.type;
-    const obj = event.data?.object || {};
-    if (type === 'checkout.session.completed' || type === 'invoice.paid') {
-      const userId = obj.metadata?.userId || obj.client_reference_id;
-      if (userId) await pool.query(`UPDATE users SET plan_status = 'active' WHERE id = $1`, [userId]);
-    }
-    if (type === 'customer.subscription.deleted') {
-      const customer = obj.customer;
-      if (customer) await pool.query(`UPDATE users SET plan_status = 'expired' WHERE stripe_customer_id = $1`, [customer]);
-    }
-    return res.json({ received: true });
   });
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
@@ -529,7 +523,11 @@ function createHttp(desk) {
   });
 
   app.get('/v1/config', (_req, res) => {
-    res.json({ googleClientId: (process.env.GOOGLE_CLIENT_ID || '').trim() });
+    res.json({
+      googleClientId: (process.env.GOOGLE_CLIENT_ID || '').trim(),
+      stripePublishableKey: stripeBilling.publishableKey() || null,
+      stripeReady: stripeBilling.stripeConfigured(),
+    });
   });
 
   app.get('/v1/billing/plans', (_req, res) => {
@@ -544,11 +542,15 @@ function createHttp(desk) {
       trialEndsAt: req.profile.trialEndsAt,
       daysLeft: req.profile.daysLeft,
       expiring: req.profile.expiring,
-      simulated: true,
+      stripe: stripeBilling.stripeConfigured(),
+      publishableKey: stripeBilling.publishableKey() || null,
     });
   });
 
   async function simulateCheckout(req, res) {
+    if (process.env.STRIPE_ALLOW_SIMULATE !== 'true') {
+      return res.status(403).json({ error: 'simulate_off', message: 'Simulação desligada. Use o checkout Stripe.' });
+    }
     if (req.profile.desk === 'unverified') {
       return res.status(403).json({ error: 'unverified', message: 'Confirme a conta antes de pagar.' });
     }
@@ -558,8 +560,8 @@ function createHttp(desk) {
     try {
       await client.query('BEGIN');
       await client.query(
-        `INSERT INTO purchases (user_id, tier, months, amount_brl, currency, status)
-         VALUES ($1,$2,$3,$4,'BRL','paid')`,
+        `INSERT INTO purchases (user_id, tier, months, amount_brl, currency, status, provider)
+         VALUES ($1,$2,$3,$4,'BRL','paid','simulate')`,
         [req.user.id, quote.tier, quote.months, quote.total],
       );
       const { rows } = await client.query(
@@ -586,7 +588,77 @@ function createHttp(desk) {
   }
 
   app.post('/v1/billing/simulate', auth, currentUser, simulateCheckout);
-  app.post('/v1/billing/checkout', auth, currentUser, simulateCheckout);
+
+  app.post('/v1/billing/checkout', auth, currentUser, async (req, res) => {
+    if (req.profile.desk === 'unverified') {
+      return res.status(403).json({ error: 'unverified', message: 'Confirme a conta antes de pagar.' });
+    }
+    const kind = req.body.kind === 'production' ? 'production' : 'plan';
+    const tier = String(req.body.tier || 'paper') === 'pro' ? 'pro' : 'paper';
+    const months = [1, 3, 6, 12].includes(Number(req.body.months)) ? Number(req.body.months) : 1;
+    const strategyId = req.body.strategyId ? String(req.body.strategyId) : null;
+    const locale = LOCALES.includes(req.body.locale) ? req.body.locale : (req.user.locale || 'pt-BR');
+    if (kind === 'plan') {
+      const quote = quotePlan(tier, months);
+      if (!quote) return res.status(400).json({ error: 'invalid_body', message: 'Escolha paper ou pro, por 1, 3, 6 ou 12 meses.' });
+    }
+    if (kind === 'production') {
+      if (!strategyId) return res.status(400).json({ error: 'invalid_body', message: 'Informe a estratégia.' });
+      const { rows } = await pool.query(
+        'SELECT id FROM strategies WHERE id = $1 AND user_id = $2',
+        [strategyId, req.user.id],
+      );
+      if (!rows[0]) return res.status(404).json({ error: 'not_found', message: 'Estratégia não encontrada.' });
+    }
+    try {
+      const session = await stripeBilling.createEmbeddedCheckout({
+        user: req.user,
+        kind,
+        tier,
+        months,
+        strategyId,
+        locale,
+      });
+      return res.json(session);
+    } catch (err) {
+      if (err.code === 'stripe_off') {
+        return res.status(503).json({ error: 'stripe_off', message: 'Pagamento Stripe ainda não está configurado.' });
+      }
+      console.error('[stripe checkout]', err.message);
+      return res.status(502).json({ error: 'stripe_fail', message: err.message });
+    }
+  });
+
+  app.get('/v1/billing/session/:id', auth, currentUser, async (req, res) => {
+    const sessionId = String(req.params.id || '');
+    if (!sessionId.startsWith('cs_')) {
+      return res.status(400).json({ error: 'invalid_session' });
+    }
+    try {
+      const session = await stripeBilling.retrieveAndFulfill(sessionId, desk);
+      const metaUser = session.metadata?.userId || session.client_reference_id;
+      if (metaUser && metaUser !== req.user.id) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const user = await loadUser(req.user.id);
+      return res.json({
+        session: {
+          id: session.id,
+          status: session.status,
+          paymentStatus: session.payment_status,
+          amountTotal: session.amount_total,
+          currency: session.currency,
+        },
+        user: publicUser(user),
+      });
+    } catch (err) {
+      if (err.code === 'stripe_off') {
+        return res.status(503).json({ error: 'stripe_off' });
+      }
+      console.error('[stripe session]', err.message);
+      return res.status(502).json({ error: 'stripe_fail', message: err.message });
+    }
+  });
 
   app.post('/v1/billing/cancel', auth, currentUser, async (req, res) => {
     const row = await loadUser(req.user.id);
@@ -706,34 +778,22 @@ function createHttp(desk) {
       [req.user.id, req.params.id],
     );
     if (existing[0]) return res.json({ order: orderView(existing[0]), already: true });
-    const quote = productionQuote(quoteLocale(req));
-    const readyBy = new Date(Date.now() + 3 * 86400000);
-    const { rows } = await pool.query(
-      `INSERT INTO production_orders
-        (user_id, user_email, user_name, locale, strategy_id, strategy_name, thesis, recipe,
-         amount_brl, currency, local_amount, fx_rate, status, ready_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,'paid',$13)
-       RETURNING *`,
-      [
-        req.user.id, req.user.email, req.user.name || null, quote.locale,
-        strategies[0].id, strategies[0].name, strategies[0].description || '',
-        JSON.stringify(strategies[0].params || {}),
-        quote.amountBrl, quote.currency, quote.localAmount, quote.fxRate, readyBy,
-      ],
-    );
-    await notifyOwner(
-      `TradeAI produção · ${req.user.email} · ${strategies[0].name}`,
-      [
-        `Usuário: ${req.user.name || ''} <${req.user.email}>`,
-        `Id: ${req.user.id}`,
-        `Estratégia: ${strategies[0].name} (${strategies[0].id})`,
-        `Descrição: ${strategies[0].description || ''}`,
-        `Valor: ${quote.localAmount} ${quote.currency} (R$ ${quote.amountBrl})`,
-        `Pedido: ${rows[0].id}`,
-        `Pronto em média até: ${readyBy.toISOString()}`,
-      ].join('\n'),
-    );
-    return res.json({ order: orderView(rows[0]), quote });
+    const locale = LOCALES.includes(req.body.locale) ? req.body.locale : quoteLocale(req);
+    try {
+      const session = await stripeBilling.createEmbeddedCheckout({
+        user: req.user,
+        kind: 'production',
+        strategyId: strategies[0].id,
+        locale,
+      });
+      return res.json({ checkout: session, quote: productionQuote(locale) });
+    } catch (err) {
+      if (err.code === 'stripe_off') {
+        return res.status(503).json({ error: 'stripe_off', message: 'Pagamento Stripe ainda não está configurado.' });
+      }
+      console.error('[stripe production]', err.message);
+      return res.status(502).json({ error: 'stripe_fail', message: err.message });
+    }
   });
 
   app.get('/v1/strategies', auth, currentUser, requireDesk, async (req, res) => {

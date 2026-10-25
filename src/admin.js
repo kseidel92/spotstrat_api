@@ -202,6 +202,33 @@ function mountAdmin(app) {
     res.json({ purchases: rows });
   });
 
+  app.get('/v1/admin/stripe-checkouts', async (req, res) => {
+    const limit = clampInt(req.query.limit, 50, 1, 200);
+    const { rows } = await pool.query(
+      `SELECT c.*, u.email, u.name
+       FROM stripe_checkouts c
+       LEFT JOIN users u ON u.id = c.user_id
+       ORDER BY c.created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({ checkouts: rows });
+  });
+
+  app.get('/v1/admin/stripe-events', async (req, res) => {
+    const limit = clampInt(req.query.limit, 50, 1, 200);
+    const { rows } = await pool.query(
+      `SELECT id, type, process_error, processed_at, created_at,
+              payload->'data'->'object'->>'id' AS object_id,
+              payload->'data'->'object'->>'payment_status' AS payment_status
+       FROM stripe_events
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json({ events: rows });
+  });
+
   app.get('/v1/admin/production-orders', async (req, res) => {
     const limit = clampInt(req.query.limit, 50, 1, 200);
     const { rows } = await pool.query(

@@ -180,9 +180,49 @@ CREATE TABLE IF NOT EXISTS purchases (
   amount_brl numeric NOT NULL,
   currency text NOT NULL DEFAULT 'BRL',
   status text NOT NULL DEFAULT 'paid',
+  provider text NOT NULL DEFAULT 'manual',
+  stripe_session_id text,
+  stripe_payment_intent_id text,
+  stripe_customer_id text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS purchases_user_idx ON purchases (user_id, created_at DESC);
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT 'manual';
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS stripe_session_id text;
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS stripe_payment_intent_id text;
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS stripe_customer_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS purchases_stripe_session_uidx ON purchases (stripe_session_id) WHERE stripe_session_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS stripe_events (
+  id text PRIMARY KEY,
+  type text NOT NULL,
+  payload jsonb NOT NULL,
+  process_error text,
+  processed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS stripe_events_created_idx ON stripe_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS stripe_events_type_idx ON stripe_events (type, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS stripe_checkouts (
+  id text PRIMARY KEY,
+  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  kind text NOT NULL DEFAULT 'plan',
+  status text,
+  payment_status text,
+  amount_total int,
+  currency text,
+  price_id text,
+  customer_id text,
+  payment_intent_id text,
+  metadata jsonb,
+  raw jsonb,
+  fulfilled_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS stripe_checkouts_user_idx ON stripe_checkouts (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS stripe_checkouts_created_idx ON stripe_checkouts (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS production_requests (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -217,6 +257,7 @@ CREATE TABLE IF NOT EXISTS production_orders (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS production_orders_one_idx ON production_orders (user_id, strategy_id);
+ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS stripe_session_id text;
 
 CREATE TABLE IF NOT EXISTS positions (
   strategy_id text PRIMARY KEY REFERENCES strategies(id) ON DELETE CASCADE,
