@@ -16,17 +16,20 @@ npm install
 npm start
 ```
 
-API em `http://127.0.0.1:7171` (porta aberta no seu notebook).
+`npm start` sobe **Postgres + API + túnel** e **religa sozinho** se a API ou o túnel cair (também sincroniza a URL na Vercel). Logs da API: `run/api.log`.
+
+- Um processo só (debug): `npm run start:once`
+- API em `http://127.0.0.1:7171`
 
 ## Expor para a Vercel (túnel)
 
-Na sua máquina, deixe a API ouvindo em **`7171`** e publique com Cloudflare Tunnel, ngrok ou encaminhe a porta **7171** que você já abriu no roteador. Exemplo Cloudflare:
+Com `npm start` o túnel Cloudflare quick já sobe e o `HOME_API_URL` / `VITE_WS_ORIGIN` são atualizados se a URL mudar.
+
+Manual:
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:7171
 ```
-
-Copie a URL HTTPS gerada para `HOME_API_URL` no projeto **spotstrat_cloud** na Vercel.
 
 ## Variáveis importantes
 

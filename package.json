@@ -5,7 +5,8 @@
   "description": "SpotStrat API \u2014 desk paper, prompts IA, hub Binance (roda na sua m\u00e1quina)",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "./scripts/keep-online.sh",
+    "start:once": "node src/index.js",
     "dev": "node --watch src/index.js",
     "smoke": "node scripts/smoke.mjs",
     "check:asks": "node scripts/check-recipe-asks.mjs",

@@ -66,6 +66,14 @@ async function settlePrompt(job, patch) {
   const outcome = promptOutcome(job, patch);
   const detail = patch.detail || patch.error || patch.output?.ask || null;
   const name = patch.strategyName || patch.output?.name || null;
+  const errorRaw = patch.errorRaw || (outcome.status === 'failed' || patch.errorStage ? (patch.errorRaw || patch.error || detail) : null);
+  const errorStage = patch.errorStage
+    || (outcome.status === 'failed' ? 'worker' : null)
+    || (errorRaw && outcome.status !== 'created' && outcome.status !== 'updated' && outcome.status !== 'done' && outcome.status !== 'alarm' ? 'response' : null);
+  const httpStatus = outcome.status === 'failed' || outcome.status === 'rejected'
+    ? 500
+    : (outcome.status === 'needs_user' ? 200 : 200);
+  const durationMs = job.created_at ? Math.max(0, Date.now() - new Date(job.created_at).getTime()) : null;
   try {
     await pool.query(
       `UPDATE prompts
@@ -75,6 +83,11 @@ async function settlePrompt(job, patch) {
            strategy_name = COALESCE($5, strategy_name),
            strategy_ids = COALESCE($6::jsonb, strategy_ids),
            detail = $7,
+           error_raw = COALESCE($8, error_raw),
+           error_stage = COALESCE($9, error_stage),
+           http_status = COALESCE($10, http_status),
+           provider = COALESCE($11, provider),
+           duration_ms = COALESCE($12, duration_ms),
            finished_at = now()
        WHERE job_id = $1`,
       [
@@ -85,6 +98,11 @@ async function settlePrompt(job, patch) {
         name,
         patch.strategyIds ? JSON.stringify(patch.strategyIds) : null,
         detail,
+        errorRaw,
+        errorStage,
+        patch.httpStatus != null ? patch.httpStatus : httpStatus,
+        patch.output?.provider || patch.provider || null,
+        durationMs,
       ],
     );
   } catch (err) {
@@ -433,15 +451,38 @@ async function loop() {
     await runJob(job);
   } catch (err) {
     console.error('[worker]', err.message);
+    const raw = err?.stack || err?.message || String(err);
     const human = 'Não fechei a receita agora. Manda o gatilho de novo em uma frase.';
     if (job.kind === 'lab') {
       const sorry = 'Não consegui responder agora. Tenta de novo em instantes.';
-      await finish(job, { status: 'failed', error: sorry, output: { reply: sorry }, detail: err.message });
+      await finish(job, {
+        status: 'failed',
+        error: sorry,
+        output: { reply: sorry },
+        detail: sorry,
+        errorRaw: raw,
+        errorStage: 'worker',
+        httpStatus: 500,
+      });
     } else if (job.thread_id) {
       await say(job.thread_id, human, null).catch(() => {});
-      await finish(job, { status: 'needs_user', output: { ask: human }, detail: human });
+      await finish(job, {
+        status: 'needs_user',
+        output: { ask: human },
+        detail: human,
+        errorRaw: raw,
+        errorStage: 'response',
+        httpStatus: 200,
+      });
     } else {
-      await finish(job, { status: 'failed', error: human, detail: err.message });
+      await finish(job, {
+        status: 'failed',
+        error: human,
+        detail: human,
+        errorRaw: raw,
+        errorStage: 'worker',
+        httpStatus: 500,
+      });
     }
   } finally {
     running -= 1;

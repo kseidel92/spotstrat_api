@@ -13,6 +13,7 @@ const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
 const { notifyOwner, sendVerifyCode, sendResetCode } = require('./mail');
 const { suggestGuide } = require('./llm');
+const { mountAdmin } = require('./admin');
 
 const hits = new Map();
 
@@ -226,6 +227,7 @@ function createHttp(desk) {
   });
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
+  mountAdmin(app);
 
   app.get('/v1/health', async (_req, res) => {
     await pool.query('SELECT 1');
@@ -859,7 +861,12 @@ function createHttp(desk) {
     const prompt = String(req.body.prompt || '').trim();
     const found = await pool.query('SELECT id FROM strategies WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!found.rows[0]) {
-      if (prompt) await savePrompt(req, { prompt, mode: 'edit', status: 'rejected', detail: 'Estratégia não encontrada.', strategyId: req.params.id });
+      if (prompt) {
+        await savePrompt(req, {
+          prompt, mode: 'edit', status: 'rejected', detail: 'Estratégia não encontrada.', strategyId: req.params.id,
+          httpStatus: 404, errorStage: 'http',
+        });
+      }
       return res.status(404).json({ error: 'not_found', message: 'Estratégia não encontrada.' });
     }
     const job = await enqueuePrompt(req, { prompt, threadId: req.body.threadId || null, strategyId: req.params.id });
@@ -1012,11 +1019,21 @@ function createHttp(desk) {
   app.post('/v1/lab/query', auth, currentUser, requireDesk, async (req, res) => {
     const prompt = String(req.body.prompt || '').trim();
     if (!allow(`lab:${req.user.id}`, 20, 3600_000)) {
-      if (prompt) await savePrompt(req, { prompt, mode: 'lab', status: 'rejected', detail: 'Muitas perguntas ao laboratório nesta hora.' });
+      if (prompt) {
+        await savePrompt(req, {
+          prompt, mode: 'lab', status: 'rejected', detail: 'Muitas perguntas ao laboratório nesta hora.',
+          httpStatus: 429, errorStage: 'http',
+        });
+      }
       return res.status(429).json({ error: 'rate_limited', message: 'Muitas perguntas ao laboratório nesta hora.' });
     }
     if (prompt.length < 2) {
-      if (prompt) await savePrompt(req, { prompt, mode: 'lab', status: 'rejected', detail: 'Escreve o pedido.' });
+      if (prompt) {
+        await savePrompt(req, {
+          prompt, mode: 'lab', status: 'rejected', detail: 'Escreve o pedido.',
+          httpStatus: 400, errorStage: 'http',
+        });
+      }
       return res.status(400).json({ error: 'invalid_body', message: 'Escreve o pedido.' });
     }
     const history = Array.isArray(req.body.history)
@@ -1026,7 +1043,7 @@ function createHttp(desk) {
       `INSERT INTO jobs (user_id, kind, status, input) VALUES ($1, 'lab', 'queued', $2::jsonb) RETURNING id, status`,
       [req.user.id, JSON.stringify({ prompt, history, locale: req.profile?.locale || req.user?.locale || 'pt-BR' })],
     );
-    await savePrompt(req, { prompt, mode: 'lab', status: 'queued', jobId: rows[0].id });
+    await savePrompt(req, { prompt, mode: 'lab', status: 'queued', jobId: rows[0].id, httpStatus: 202 });
     res.status(202).json({ jobId: rows[0].id, status: rows[0].status });
   });
 
@@ -1095,40 +1112,78 @@ function promptMode(req, strategyId, prompt) {
   return 'create';
 }
 
-async function savePrompt(req, { prompt, mode, status, detail, jobId, threadId, strategyId }) {
+async function savePrompt(req, {
+  prompt, mode, status, detail, jobId, threadId, strategyId,
+  httpStatus = null, errorStage = null, errorRaw = null,
+}) {
   await pool.query(
-    `INSERT INTO prompts (user_id, user_email, job_id, thread_id, prompt, mode, status, strategy_id, detail, finished_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $7 = 'queued' THEN NULL ELSE now() END)`,
-    [req.user.id, req.user.email, jobId || null, threadId || null, prompt, mode, status, strategyId || null, detail || null],
+    `INSERT INTO prompts (
+       user_id, user_email, job_id, thread_id, prompt, mode, status, strategy_id, detail,
+       http_status, error_stage, error_raw, finished_at
+     ) VALUES (
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+       CASE WHEN $7 = 'queued' THEN NULL ELSE now() END
+     )`,
+    [
+      req.user.id,
+      req.user.email,
+      jobId || null,
+      threadId || null,
+      prompt,
+      mode,
+      status,
+      strategyId || null,
+      detail || null,
+      httpStatus,
+      errorStage,
+      errorRaw || detail || null,
+    ],
   );
 }
 
 async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
   const mode = promptMode(req, strategyId, prompt);
   if (prompt.length < 2) {
-    if (prompt) await savePrompt(req, { prompt, mode, status: 'rejected', detail: 'Escreve o pedido.', threadId, strategyId });
+    if (prompt) {
+      await savePrompt(req, {
+        prompt, mode, status: 'rejected', detail: 'Escreve o pedido.', threadId, strategyId,
+        httpStatus: 400, errorStage: 'http',
+      });
+    }
     return { status: 400, error: { error: 'invalid_body', message: 'Escreve o pedido.' } };
   }
   if (!allow(`prompt-h:${req.user.id}`, 60, 3600_000)) {
-    await savePrompt(req, { prompt, mode, status: 'rejected', detail: 'Muitos prompts em pouco tempo.', threadId, strategyId });
+    await savePrompt(req, {
+      prompt, mode, status: 'rejected', detail: 'Muitos prompts em pouco tempo.', threadId, strategyId,
+      httpStatus: 429, errorStage: 'http',
+    });
     return { status: 429, error: { error: 'rate_limited', message: 'Muitos prompts em pouco tempo. Tenta de novo mais tarde.' } };
   }
   if (mode === 'alarm') {
     const channels = cleanChannels(req.body.options?.channels || {});
     if (!channels.sound && !channels.email) {
-      await savePrompt(req, { prompt, mode, status: 'rejected', detail: 'Alarme sem aviso.', threadId, strategyId });
+      await savePrompt(req, {
+        prompt, mode, status: 'rejected', detail: 'Alarme sem aviso.', threadId, strategyId,
+        httpStatus: 400, errorStage: 'http',
+      });
       return { status: 400, error: { error: 'invalid_body', message: 'Marque o som, o e-mail ou os dois.' } };
     }
   }
   if (!strategyId && req.body.mode !== 'alarm' && req.body.options && walletOf(req.body.options.wallet) == null && req.body.options.wallet != null && req.body.options.wallet !== '') {
-    await savePrompt(req, { prompt, mode, status: 'rejected', detail: 'Carteira fora do intervalo.', strategyId });
+    await savePrompt(req, {
+      prompt, mode, status: 'rejected', detail: 'Carteira fora do intervalo.', strategyId,
+      httpStatus: 400, errorStage: 'http',
+    });
     return { status: 400, error: { error: 'invalid_body', message: 'A carteira fica entre 100 e 999.000 dólares.' } };
   }
   let thread = threadId;
   if (thread) {
     const own = await pool.query('SELECT id, strategy_id FROM threads WHERE id = $1 AND user_id = $2', [thread, req.user.id]);
     if (!own.rows[0]) {
-      await savePrompt(req, { prompt, mode, status: 'rejected', detail: 'Conversa não encontrada.', threadId, strategyId });
+      await savePrompt(req, {
+        prompt, mode, status: 'rejected', detail: 'Conversa não encontrada.', threadId, strategyId,
+        httpStatus: 404, errorStage: 'http',
+      });
       return { status: 404, error: { error: 'not_found', message: 'Conversa não encontrada.' } };
     }
   } else if (strategyId) {
@@ -1170,6 +1225,7 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
     jobId: job.rows[0].id,
     threadId: thread,
     strategyId,
+    httpStatus: 202,
   });
   return { jobId: job.rows[0].id, status: job.rows[0].status, threadId: thread };
 }

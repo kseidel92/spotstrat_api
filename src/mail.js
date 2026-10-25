@@ -1,6 +1,33 @@
 const fs = require('fs');
 const path = require('path');
 const { Resend } = require('resend');
+const { pool } = require('./db');
+
+async function logOutbound({
+  kind, channel = 'email', to, subject, body, userId = null, meta = null, sent = false, providerId = null, error = null,
+}) {
+  try {
+    await pool.query(
+      `INSERT INTO outbound_messages
+         (kind, channel, to_addr, subject, body, user_id, meta, sent, provider_id, error)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)`,
+      [
+        kind,
+        channel,
+        to || null,
+        subject || null,
+        body || null,
+        userId,
+        meta ? JSON.stringify(meta) : null,
+        !!sent,
+        providerId,
+        error || null,
+      ],
+    );
+  } catch (err) {
+    console.warn('[mail] log', err.message);
+  }
+}
 
 async function notifyOwner(subject, text) {
   const dir = path.join(__dirname, '..', 'data');
@@ -11,6 +38,9 @@ async function notifyOwner(subject, text) {
   const hook = (process.env.NOTIFY_WEBHOOK || '').trim();
   if (!hook) {
     console.log('[mail] pedido guardado', subject, to || 'defina OWNER_EMAIL e NOTIFY_WEBHOOK');
+    await logOutbound({
+      kind: 'owner_notify', to, subject, body: text, sent: false, error: 'no_webhook', meta: { stored: true },
+    });
     return { sent: false, stored: true, to: to || null };
   }
   const controller = new AbortController();
@@ -23,9 +53,16 @@ async function notifyOwner(subject, text) {
       signal: controller.signal,
     });
     console.log('[mail] webhook', res.status, subject);
+    await logOutbound({
+      kind: 'owner_notify', to, subject, body: text, sent: res.ok,
+      error: res.ok ? null : `webhook_${res.status}`, meta: { stored: true },
+    });
     return { sent: res.ok, stored: true, to: to || null };
   } catch (err) {
     console.warn('[mail] webhook', err.message);
+    await logOutbound({
+      kind: 'owner_notify', to, subject, body: text, sent: false, error: err.message, meta: { stored: true },
+    });
     return { sent: false, stored: true, to: to || null };
   } finally {
     clearTimeout(timer);
@@ -84,9 +121,14 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-async function sendMail({ to, subject, text, html }) {
+async function sendMail({ to, subject, text, html, kind = 'email', userId = null }) {
   const resend = resendClient();
-  if (!resend) return { sent: false, skipped: true };
+  if (!resend) {
+    await logOutbound({
+      kind, to, subject, body: text, userId, sent: false, error: 'resend_off',
+    });
+    return { sent: false, skipped: true };
+  }
   const replyTo = (process.env.RESEND_REPLY_TO || 'support@spotstrat.com').trim();
   try {
     const { data, error } = await resend.emails.send({
@@ -99,12 +141,22 @@ async function sendMail({ to, subject, text, html }) {
     });
     if (error) {
       console.warn('[mail] resend', error.message || error.name || 'erro');
+      await logOutbound({
+        kind, to, subject, body: text, userId, sent: false,
+        error: error.message || error.name || 'resend',
+      });
       return { sent: false, error: 'resend' };
     }
     console.log('[mail] enviado', to, data?.id || '');
+    await logOutbound({
+      kind, to, subject, body: text, userId, sent: true, providerId: data?.id || null,
+    });
     return { sent: true, id: data?.id || null };
   } catch (err) {
     console.warn('[mail] resend', err.message);
+    await logOutbound({
+      kind, to, subject, body: text, userId, sent: false, error: err.message,
+    });
     return { sent: false, error: err.message };
   }
 }
@@ -141,26 +193,28 @@ function codeHtml(text, code) {
   return `<p style="font-family:sans-serif;font-size:16px;color:#0a0e1a">${safe}</p><p style="font-family:sans-serif;font-size:32px;letter-spacing:0.2em;color:#0a0e1a"><strong>${escapeHtml(code)}</strong></p>`;
 }
 
-async function sendVerifyCode({ to, code, locale }) {
+async function sendVerifyCode({ to, code, locale, userId = null }) {
   const copy = verifyCopy(locale);
   const text = copy.text(code);
-  return sendMail({ to, subject: copy.subject, text, html: codeHtml(text, code) });
+  return sendMail({ to, subject: copy.subject, text, html: codeHtml(text, code), kind: 'verify', userId });
 }
 
-async function sendResetCode({ to, code, locale }) {
+async function sendResetCode({ to, code, locale, userId = null }) {
   const copy = locale === 'es-MX' ? RESET_COPY.es : (RESET_COPY[locale] || RESET_COPY.en);
   const text = copy.text(code);
-  return sendMail({ to, subject: copy.subject, text, html: codeHtml(text, code) });
+  return sendMail({ to, subject: copy.subject, text, html: codeHtml(text, code), kind: 'reset', userId });
 }
 
-async function sendAlarm({ to, subject, text }) {
+async function sendAlarm({ to, subject, text, userId = null }) {
   const safe = escapeHtml(text).replace(/\n/g, '<br>');
   return sendMail({
     to,
     subject: subject || 'Alarme SpotStrat',
     text,
     html: `<p style="font-family:sans-serif;font-size:16px;color:#0a0e1a">${safe}</p><p style="font-family:sans-serif;font-size:14px;color:#475569">A ordem continua sua. Responda este e-mail se precisar de ajuda.</p>`,
+    kind: 'alarm',
+    userId,
   });
 }
 
-module.exports = { notifyOwner, sendVerifyCode, sendResetCode, sendAlarm };
+module.exports = { notifyOwner, sendVerifyCode, sendResetCode, sendAlarm, logOutbound };

@@ -237,15 +237,22 @@ bring_up() {
 bring_up
 
 if [[ "$WATCH" -eq 1 ]]; then
-  log "Watch ativo (Ctrl+C para parar). Checa a cada 20s."
+  log "Watch ativo (Ctrl+C para parar). Checa a cada 10s."
+  log "Logs da API: $API_LOG"
   while true; do
-    sleep 20
+    sleep 10
+    ensure_postgres || true
     if ! api_ok; then
-      log "API caiu — religando"
+      log "API fora — religando"
+      # mata pid antigo se ainda estiver zumbi na porta
+      if [[ -f "$API_PID" ]]; then
+        kill "$(cat "$API_PID")" 2>/dev/null || true
+        rm -f "$API_PID"
+      fi
       start_api || true
     fi
     if ! tunnel_ok; then
-      log "Túnel caiu — religando + sync Vercel"
+      log "Túnel fora — religando + sync Vercel"
       ensure_tunnel || true
       sync_vercel_urls || true
     fi

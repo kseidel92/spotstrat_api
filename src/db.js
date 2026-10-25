@@ -3,6 +3,14 @@ const { Pool } = require('pg');
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 12,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+});
+
+// Sem isso, "terminating connection due to administrator command" (57P01)
+// vira Unhandled 'error' no BoundPool e derruba o processo inteiro.
+pool.on('error', (err) => {
+  console.error('[db] conexão ociosa caiu:', err.code || '', err.message);
 });
 
 const SCHEMA = `
@@ -246,11 +254,39 @@ CREATE TABLE IF NOT EXISTS prompts (
   strategy_name text,
   strategy_ids jsonb,
   detail text,
+  http_status int,
+  error_stage text,
+  error_raw text,
+  provider text,
+  duration_ms int,
   created_at timestamptz NOT NULL DEFAULT now(),
   finished_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS prompts_user_idx ON prompts (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS prompts_created_idx ON prompts (created_at DESC);
+CREATE INDEX IF NOT EXISTS prompts_status_idx ON prompts (status, created_at DESC);
+ALTER TABLE prompts ADD COLUMN IF NOT EXISTS http_status int;
+ALTER TABLE prompts ADD COLUMN IF NOT EXISTS error_stage text;
+ALTER TABLE prompts ADD COLUMN IF NOT EXISTS error_raw text;
+ALTER TABLE prompts ADD COLUMN IF NOT EXISTS provider text;
+ALTER TABLE prompts ADD COLUMN IF NOT EXISTS duration_ms int;
+
+CREATE TABLE IF NOT EXISTS outbound_messages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind text NOT NULL,
+  channel text NOT NULL DEFAULT 'email',
+  to_addr text,
+  subject text,
+  body text,
+  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  meta jsonb,
+  sent boolean NOT NULL DEFAULT false,
+  provider_id text,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS outbound_messages_created_idx ON outbound_messages (created_at DESC);
+CREATE INDEX IF NOT EXISTS outbound_messages_kind_idx ON outbound_messages (kind, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS research_artifacts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
