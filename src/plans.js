@@ -1,5 +1,5 @@
 const MONTHLY = { paper: 93.33 };
-const PRODUCTION_BRL = 633.3;
+const PRODUCTION_BRL = 319.33;
 const FX = { BRL: 1, USD: 0.19723, EUR: 0.1756, MXN: 3.65, JPY: 31.175 };
 const LOCALE_CCY = { 'pt-BR': 'BRL', en: 'USD', es: 'EUR', 'es-MX': 'MXN', fr: 'EUR', de: 'EUR', ja: 'JPY' };
 const TERMS = [
