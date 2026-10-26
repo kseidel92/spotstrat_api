@@ -179,7 +179,7 @@ function mountAdmin(app) {
     const { rows } = await pool.query(
       `SELECT id, email, name, phone_e164, locale, plan_status, plan_tier,
               email_verified_at, trial_ends_at, prompt_count, created_at,
-              cancel_requested_at, refund_status
+              cancel_requested_at, refund_status, stripe_customer_id, stripe_subscription_id
        FROM users
        ${filter}
        ORDER BY created_at DESC
@@ -192,7 +192,11 @@ function mountAdmin(app) {
   app.get('/v1/admin/purchases', async (req, res) => {
     const limit = clampInt(req.query.limit, 50, 1, 200);
     const { rows } = await pool.query(
-      `SELECT p.*, u.email, u.name
+      `SELECT p.*, u.email, u.name,
+              u.plan_status AS user_plan_status,
+              u.plan_tier AS user_plan_tier,
+              u.trial_ends_at AS user_access_ends_at,
+              u.stripe_subscription_id AS user_subscription_id
        FROM purchases p
        JOIN users u ON u.id = p.user_id
        ORDER BY p.created_at DESC
@@ -205,7 +209,7 @@ function mountAdmin(app) {
   app.get('/v1/admin/stripe-checkouts', async (req, res) => {
     const limit = clampInt(req.query.limit, 50, 1, 200);
     const { rows } = await pool.query(
-      `SELECT c.*, u.email, u.name
+      `SELECT c.*, u.email, u.name, u.plan_status, u.trial_ends_at AS user_access_ends_at
        FROM stripe_checkouts c
        LEFT JOIN users u ON u.id = c.user_id
        ORDER BY c.created_at DESC
@@ -220,7 +224,9 @@ function mountAdmin(app) {
     const { rows } = await pool.query(
       `SELECT id, type, process_error, processed_at, created_at,
               payload->'data'->'object'->>'id' AS object_id,
-              payload->'data'->'object'->>'payment_status' AS payment_status
+              payload->'data'->'object'->>'payment_status' AS payment_status,
+              payload->'data'->'object'->'metadata'->>'userId' AS user_id,
+              payload->'data'->'object'->>'amount_total' AS amount_total
        FROM stripe_events
        ORDER BY created_at DESC
        LIMIT $1`,

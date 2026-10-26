@@ -41,6 +41,33 @@ function priceForProduction() {
   return (process.env.STRIPE_PRICE_PRODUCTION_ID || process.env.STRIPE_PRICE_ID || '').trim();
 }
 
+/** Duração de acesso em meses — nunca confiar no body do cliente para o Price padrão. */
+function monthsFromStripePrice(price) {
+  if (!price?.recurring) return null;
+  const count = Math.max(1, Number(price.recurring.interval_count) || 1);
+  if (price.recurring.interval === 'year') return count * 12;
+  if (price.recurring.interval === 'month') return count;
+  if (price.recurring.interval === 'week') return Math.max(1, Math.ceil((count * 7) / 30));
+  if (price.recurring.interval === 'day') return Math.max(1, Math.ceil(count / 30));
+  return 1;
+}
+
+async function resolveAccessMonths(stripe, priceId, requestedMonths) {
+  const price = await stripe.prices.retrieve(priceId);
+  const fromRecurring = monthsFromStripePrice(price);
+  if (fromRecurring != null) return { months: fromRecurring, price, mode: 'subscription' };
+
+  const req = [1, 3, 6, 12].includes(Number(requestedMonths)) ? Number(requestedMonths) : 1;
+  const fallback = (process.env.STRIPE_PRICE_ID || '').trim();
+  const dedicatedPaper = (process.env[`STRIPE_PRICE_PAPER_${req === 12 ? '12M' : `${req}M`}`] || '').trim();
+  const dedicatedPro = (process.env[`STRIPE_PRICE_PRO_${req === 12 ? '12M' : `${req}M`}`] || '').trim();
+  // Só aceita months do cliente se o Price for o dedicado daquele prazo (não o Price único de R$1).
+  if (priceId && priceId !== fallback && (priceId === dedicatedPaper || priceId === dedicatedPro)) {
+    return { months: req, price, mode: 'payment' };
+  }
+  return { months: 1, price, mode: 'payment' };
+}
+
 function stripeLocale(locale) {
   const map = {
     'pt-BR': 'pt-BR',
@@ -148,12 +175,41 @@ async function fulfillPlan(session, desk) {
     throw new Error(`payment_status=${session.payment_status}`);
   }
   const tier = meta.tier === 'pro' ? 'pro' : 'paper';
-  const months = Math.max(1, Number(meta.months) || 1);
+  const stripe = stripeClient();
+  const priceId = meta.priceId || null;
+  let months = Math.max(1, Number(meta.months) || 1);
+  let accessEndsAt = null;
+  let subscriptionId = typeof session.subscription === 'string'
+    ? session.subscription
+    : session.subscription?.id || null;
+
+  // Duração vem do Price / período da assinatura Stripe — não do que o browser pediu.
+  if (stripe && priceId) {
+    try {
+      const resolved = await resolveAccessMonths(stripe, priceId, months);
+      months = resolved.months;
+    } catch (_) { /* keep meta months */ }
+  }
+  if (stripe && subscriptionId) {
+    try {
+      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      if (sub.current_period_end) {
+        accessEndsAt = new Date(sub.current_period_end * 1000);
+      }
+    } catch (_) { /* interval fallback below */ }
+  }
+  if (!accessEndsAt) {
+    accessEndsAt = new Date();
+    accessEndsAt.setUTCMonth(accessEndsAt.getUTCMonth() + months);
+  }
+
   const amountTotal = Number(session.amount_total || 0);
   const currency = String(session.currency || 'brl').toUpperCase();
-  const amountBrl = currency === 'BRL'
-    ? amountTotal / 100
-    : amountTotal / 100; // gravamos o valor cobrado; currency na purchase
+  const amountBrl = amountTotal / 100;
+  const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id || null;
+  const paymentIntentId = typeof session.payment_intent === 'string'
+    ? session.payment_intent
+    : session.payment_intent?.id || null;
 
   const client = await pool.connect();
   try {
@@ -169,9 +225,10 @@ async function fulfillPlan(session, desk) {
     const { rows: purchases } = await client.query(
       `INSERT INTO purchases (
          user_id, tier, months, amount_brl, currency, status,
-         stripe_session_id, stripe_payment_intent_id, stripe_customer_id, provider
+         stripe_session_id, stripe_payment_intent_id, stripe_customer_id,
+         stripe_subscription_id, access_ends_at, provider
        )
-       SELECT $1,$2,$3,$4,$5,'paid',$6,$7,$8,'stripe'
+       SELECT $1,$2,$3,$4,$5,'paid',$6,$7,$8,$9,$10,'stripe'
        WHERE NOT EXISTS (
          SELECT 1 FROM purchases WHERE stripe_session_id = $6
        )
@@ -183,8 +240,10 @@ async function fulfillPlan(session, desk) {
         amountBrl,
         currency,
         session.id,
-        typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id || null,
-        typeof session.customer === 'string' ? session.customer : session.customer?.id || null,
+        paymentIntentId,
+        customerId,
+        subscriptionId,
+        accessEndsAt.toISOString(),
       ],
     );
     const { rows: users } = await client.query(
@@ -193,16 +252,18 @@ async function fulfillPlan(session, desk) {
            plan_status = 'active',
            cancel_requested_at = NULL,
            refund_status = 'none',
-           stripe_customer_id = COALESCE($4, stripe_customer_id),
+           stripe_customer_id = COALESCE($3, stripe_customer_id),
+           stripe_subscription_id = COALESCE($4, stripe_subscription_id),
            trial_started_at = COALESCE(trial_started_at, now()),
-           trial_ends_at = GREATEST(COALESCE(trial_ends_at, now()), now()) + ($3 || ' months')::interval
+           trial_ends_at = GREATEST(COALESCE(trial_ends_at, now()), $5::timestamptz)
        WHERE id = $1
        RETURNING *`,
       [
         userId,
         tier,
-        String(months),
-        typeof session.customer === 'string' ? session.customer : session.customer?.id || null,
+        customerId,
+        subscriptionId,
+        accessEndsAt.toISOString(),
       ],
     );
     await client.query(
@@ -350,24 +411,19 @@ async function createEmbeddedCheckout({
     ? `/${lng}/app/strategies/${strategyId}/producao`
     : `/${lng}/app/checkout?tier=${tier}&months=${months}`;
 
-  // Price SpotStrat R$1,00 no Dashboard é recorrente → mode subscription.
-  // Override: STRIPE_CHECKOUT_MODE=payment|subscription
+  // Duração e mode derivados do Price Stripe (anti-burla do body months).
   const modeEnv = (process.env.STRIPE_CHECKOUT_MODE || '').trim().toLowerCase();
-  let mode = modeEnv === 'payment' || modeEnv === 'subscription' ? modeEnv : null;
-  if (!mode) {
-    try {
-      const price = await stripe.prices.retrieve(priceId);
-      mode = price.type === 'recurring' ? 'subscription' : 'payment';
-    } catch (_) {
-      mode = 'subscription';
-    }
-  }
+  const resolved = await resolveAccessMonths(stripe, priceId, months);
+  const accessMonths = resolved.months;
+  let mode = modeEnv === 'payment' || modeEnv === 'subscription'
+    ? modeEnv
+    : (resolved.price?.type === 'recurring' ? 'subscription' : 'payment');
 
   const meta = {
     userId: user.id,
     kind,
     tier: String(tier || 'paper'),
-    months: String(months || 1),
+    months: String(accessMonths),
     strategyId: strategyId || '',
     locale: lng,
     priceId,
@@ -405,13 +461,15 @@ async function createEmbeddedCheckout({
     userId: user.id,
     kind,
     priceId,
-    metadata: { tier, months, strategyId },
+    metadata: { tier, months: accessMonths, strategyId },
   });
 
   return {
     sessionId: session.id,
     url: session.url,
     publishableKey: publishableKey(),
+    accessMonths,
+    mode,
   };
 }
 
@@ -455,21 +513,53 @@ async function handleWebhook(rawBody, signature, desk) {
       await upsertCheckoutRow(obj);
     } else if (event.type === 'customer.subscription.deleted') {
       const customer = typeof obj.customer === 'string' ? obj.customer : obj.customer?.id;
-      if (customer) {
+      const userId = obj.metadata?.userId || null;
+      if (userId) {
         await pool.query(
-          `UPDATE users SET plan_status = 'expired' WHERE stripe_customer_id = $1`,
+          `UPDATE users
+           SET plan_status = 'expired', trial_ends_at = LEAST(COALESCE(trial_ends_at, now()), now()),
+               stripe_subscription_id = NULL
+           WHERE id = $1`,
+          [userId],
+        );
+      } else if (customer) {
+        await pool.query(
+          `UPDATE users
+           SET plan_status = 'expired', trial_ends_at = LEAST(COALESCE(trial_ends_at, now()), now()),
+               stripe_subscription_id = NULL
+           WHERE stripe_customer_id = $1`,
           [customer],
         );
       }
     } else if (event.type === 'invoice.paid') {
-      const userId = obj.subscription_details?.metadata?.userId
+      const subId = typeof obj.subscription === 'string' ? obj.subscription : obj.subscription?.id;
+      let userId = obj.subscription_details?.metadata?.userId
         || obj.lines?.data?.[0]?.metadata?.userId
-        || obj.metadata?.userId;
+        || obj.metadata?.userId
+        || null;
+      let accessEndsAt = null;
+      if (subId && stripe) {
+        try {
+          const sub = await stripe.subscriptions.retrieve(subId);
+          if (!userId) userId = sub.metadata?.userId || null;
+          if (sub.current_period_end) {
+            accessEndsAt = new Date(sub.current_period_end * 1000).toISOString();
+          }
+        } catch (_) { /* ignore */ }
+      }
       if (userId) {
         await pool.query(
-          `UPDATE users SET plan_status = 'active' WHERE id = $1`,
-          [userId],
+          `UPDATE users
+           SET plan_status = 'active',
+               stripe_subscription_id = COALESCE($2, stripe_subscription_id),
+               trial_ends_at = CASE
+                 WHEN $3::timestamptz IS NULL THEN trial_ends_at
+                 ELSE GREATEST(COALESCE(trial_ends_at, now()), $3::timestamptz)
+               END
+           WHERE id = $1`,
+          [userId, subId || null, accessEndsAt],
         );
+        if (desk) await desk.reloadUser(userId);
       }
     } else if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
       await pool.query(

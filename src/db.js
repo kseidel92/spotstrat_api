@@ -191,7 +191,11 @@ ALTER TABLE purchases ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT 'm
 ALTER TABLE purchases ADD COLUMN IF NOT EXISTS stripe_session_id text;
 ALTER TABLE purchases ADD COLUMN IF NOT EXISTS stripe_payment_intent_id text;
 ALTER TABLE purchases ADD COLUMN IF NOT EXISTS stripe_customer_id text;
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS stripe_subscription_id text;
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS access_ends_at timestamptz;
 CREATE UNIQUE INDEX IF NOT EXISTS purchases_stripe_session_uidx ON purchases (stripe_session_id) WHERE stripe_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS purchases_subscription_idx ON purchases (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_subscription_id text;
 
 CREATE TABLE IF NOT EXISTS stripe_events (
   id text PRIMARY KEY,
