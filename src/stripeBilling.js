@@ -337,17 +337,30 @@ async function createEmbeddedCheckout({
   const customerId = await ensureCustomer(stripe, user);
   const origin = webOrigin();
   const lng = locale || user.locale || 'pt-BR';
-  const returnPath = kind === 'production' && strategyId
+  const successPath = kind === 'production' && strategyId
     ? `/${lng}/app/strategies/${strategyId}/producao?paid=1&session_id={CHECKOUT_SESSION_ID}`
     : `/${lng}/app/checkout/return?session_id={CHECKOUT_SESSION_ID}`;
+  const cancelPath = kind === 'production' && strategyId
+    ? `/${lng}/app/strategies/${strategyId}/producao`
+    : `/${lng}/app/checkout?tier=${tier}&months=${months}`;
 
+  // Checkout Studio (hosted_page). SDK stripe@^23 → ui_mode hosted_page.
+  // payment_method_collection só entra em mode=subscription (regra Stripe).
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
-    ui_mode: 'embedded',
+    ui_mode: 'hosted_page',
+    billing_address_collection: 'auto',
+    phone_number_collection: { enabled: false },
+    automatic_tax: { enabled: false },
+    allow_promotion_codes: false,
+    submit_type: 'auto',
+    integration_identifier: 'hosted_web_0001',
+    origin_context: 'web',
     customer: customerId,
     client_reference_id: user.id,
     line_items: [{ price: priceId, quantity: 1 }],
-    return_url: `${origin}${returnPath}`,
+    success_url: `${origin}${successPath}`,
+    cancel_url: `${origin}${cancelPath}`,
     locale: stripeLocale(lng),
     metadata: {
       userId: user.id,
@@ -378,7 +391,7 @@ async function createEmbeddedCheckout({
 
   return {
     sessionId: session.id,
-    clientSecret: session.client_secret,
+    url: session.url,
     publishableKey: publishableKey(),
   };
 }
