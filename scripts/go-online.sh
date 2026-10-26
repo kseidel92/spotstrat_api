@@ -328,10 +328,11 @@ sync_public_endpoints() {
   if ! needs_full_sync; then
     return 0
   fi
+  mkdir -p "$ROOT/run"
   log "Sincronizando endpoints públicos para $url"
   sync_vercel_urls || true
   sync_stripe_webhook || true
-  echo -n "$url" >"$SYNCED_FILE"
+  printf '%s' "$url" >"$SYNCED_FILE"
   log "Sync marcado em $SYNCED_FILE"
 }
 
