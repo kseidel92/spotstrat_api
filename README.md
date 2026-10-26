@@ -16,14 +16,20 @@ npm install
 npm start
 ```
 
-`npm start` sobe **Postgres + API + túnel** e **religa sozinho** se a API ou o túnel cair (também sincroniza a URL na Vercel). Logs da API: `run/api.log`.
+`npm start` (= `keep-online` / `go-online --watch`) sobe **Postgres + API + túnel** e **fica de olho**:
+
+- religa a API se cair
+- recria o túnel se a URL morrer
+- se a URL do túnel mudar: atualiza `cloud/vercel.json` + `front/vercel.json`, faz push, deploy Vercel prod e aponta o **webhook Stripe** para `${túnel}/v1/billing/webhook`
+
+Logs: `run/api.log`, `run/keep.log`.
 
 - Um processo só (debug): `npm run start:once`
 - API em `http://127.0.0.1:7171`
 
 ## Expor para a Vercel (túnel)
 
-Com `npm start` o túnel Cloudflare quick já sobe e o `HOME_API_URL` / `VITE_WS_ORIGIN` são atualizados se a URL mudar.
+Com `npm start` o `HOME_API_URL`, o `VITE_WS_ORIGIN` e o webhook Stripe acompanham a URL do túnel automaticamente.
 
 Manual:
 
