@@ -1,25 +1,25 @@
 # Stripe Integration TODO
 
-Fonte única do que falta para o checkout ir ao ar. Integração: **Hosted Checkout** (`ui_mode: hosted_page`).
+Integração: **Hosted Checkout** (`ui_mode: hosted_page`) + assinatura (Price SpotStrat R$ 1,00 é **recurring**).
 
-Cenário detectado: **A** — já existia `stripe.checkout.sessions.create` em [`src/stripeBilling.js`](src/stripeBilling.js).
+Status (2026-10-26): keys live + webhook + price gravados no `.env` local (não commitado). Código detecta Price recorrente e usa `mode: subscription`.
 
 ---
 
 ## Values to Replace
 
-Os placeholders abaixo precisam dos valores reais do Dashboard antes do teste.
+Quase tudo preenchido no servidor. Opcional:
 
 **Arquivos:**
-- [`src/stripeBilling.js`](src/stripeBilling.js) (lê `STRIPE_PRICE_ID` / prices opcionais do env)
+- [`src/stripeBilling.js`](src/stripeBilling.js)
 - [`.env`](.env) (local; não commitado)
-- [`.env.example`](.env.example)
 
 | Field | Current Value | What to Set |
 |-------|---------------|-------------|
-| `mode` | `payment` | Já correto para cobrança única (produto de R$ 1,00). Só mude para `subscription` se o Price for recorrente. |
-| `success_url` / `cancel_url` | Gerados de `WEB_ORIGIN` + rotas do app | Confirme `WEB_ORIGIN` no `.env` (ex.: `https://spotstrat.com,https://www.spotstrat.com`). |
-| `line_items[].price` | `process.env.STRIPE_PRICE_ID` (vazio hoje) | Price ID do produto de **R$ 1,00** → [Dashboard → Prices](https://dashboard.stripe.com/test/prices) |
+| `mode` | auto (`subscription` para o Price atual) | Override com `STRIPE_CHECKOUT_MODE=payment` só se criar Price **one-time**. |
+| `success_url` / `cancel_url` | `STRIPE_CHECKOUT_ORIGIN` → `https://www.spotstrat.com` | OK |
+| `line_items[].price` | `price_1UUbHhDq0twHHqXV86l68bu8` (R$ 1,00 BRL recurring) | OK |
+| `STRIPE_PUBLISHABLE_KEY` | vazio | **Opcional** no fluxo hosted (redirect). Se for usar Elements depois: Dashboard → API keys → `pk_live_…` |
 
 ---
 

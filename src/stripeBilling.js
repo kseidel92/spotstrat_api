@@ -55,8 +55,14 @@ function stripeLocale(locale) {
 }
 
 function webOrigin() {
-  const raw = (process.env.WEB_ORIGIN || 'http://127.0.0.1:7172').split(',')[0].trim();
-  return raw.replace(/\/$/, '') || 'http://127.0.0.1:7172';
+  const preferred = (process.env.STRIPE_CHECKOUT_ORIGIN || '').trim().replace(/\/$/, '');
+  if (preferred) return preferred;
+  const parts = (process.env.WEB_ORIGIN || 'http://127.0.0.1:7172')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const httpsPublic = parts.find((o) => /^https:\/\//i.test(o) && !/localhost|127\.0\.0\.1/i.test(o));
+  return (httpsPublic || parts[0] || 'http://127.0.0.1:7172').replace(/\/$/, '');
 }
 
 async function ensureCustomer(stripe, user) {
@@ -344,10 +350,32 @@ async function createEmbeddedCheckout({
     ? `/${lng}/app/strategies/${strategyId}/producao`
     : `/${lng}/app/checkout?tier=${tier}&months=${months}`;
 
+  // Price SpotStrat R$1,00 no Dashboard é recorrente → mode subscription.
+  // Override: STRIPE_CHECKOUT_MODE=payment|subscription
+  const modeEnv = (process.env.STRIPE_CHECKOUT_MODE || '').trim().toLowerCase();
+  let mode = modeEnv === 'payment' || modeEnv === 'subscription' ? modeEnv : null;
+  if (!mode) {
+    try {
+      const price = await stripe.prices.retrieve(priceId);
+      mode = price.type === 'recurring' ? 'subscription' : 'payment';
+    } catch (_) {
+      mode = 'subscription';
+    }
+  }
+
+  const meta = {
+    userId: user.id,
+    kind,
+    tier: String(tier || 'paper'),
+    months: String(months || 1),
+    strategyId: strategyId || '',
+    locale: lng,
+    priceId,
+  };
+
   // Checkout Studio (hosted_page). SDK stripe@^23 → ui_mode hosted_page.
-  // payment_method_collection só entra em mode=subscription (regra Stripe).
-  const session = await stripe.checkout.sessions.create({
-    mode: 'payment',
+  const sessionParams = {
+    mode,
     ui_mode: 'hosted_page',
     billing_address_collection: 'auto',
     phone_number_collection: { enabled: false },
@@ -362,25 +390,16 @@ async function createEmbeddedCheckout({
     success_url: `${origin}${successPath}`,
     cancel_url: `${origin}${cancelPath}`,
     locale: stripeLocale(lng),
-    metadata: {
-      userId: user.id,
-      kind,
-      tier: String(tier || 'paper'),
-      months: String(months || 1),
-      strategyId: strategyId || '',
-      locale: lng,
-      priceId,
-    },
-    payment_intent_data: {
-      metadata: {
-        userId: user.id,
-        kind,
-        tier: String(tier || 'paper'),
-        months: String(months || 1),
-        strategyId: strategyId || '',
-      },
-    },
-  });
+    metadata: meta,
+  };
+  if (mode === 'subscription') {
+    sessionParams.payment_method_collection = 'always';
+    sessionParams.subscription_data = { metadata: meta };
+  } else {
+    sessionParams.payment_intent_data = { metadata: meta };
+  }
+
+  const session = await stripe.checkout.sessions.create(sessionParams);
 
   await upsertCheckoutRow(session, {
     userId: user.id,
@@ -434,6 +453,24 @@ async function handleWebhook(rawBody, signature, desk) {
       await fulfillSession(obj, desk);
     } else if (event.type === 'checkout.session.expired') {
       await upsertCheckoutRow(obj);
+    } else if (event.type === 'customer.subscription.deleted') {
+      const customer = typeof obj.customer === 'string' ? obj.customer : obj.customer?.id;
+      if (customer) {
+        await pool.query(
+          `UPDATE users SET plan_status = 'expired' WHERE stripe_customer_id = $1`,
+          [customer],
+        );
+      }
+    } else if (event.type === 'invoice.paid') {
+      const userId = obj.subscription_details?.metadata?.userId
+        || obj.lines?.data?.[0]?.metadata?.userId
+        || obj.metadata?.userId;
+      if (userId) {
+        await pool.query(
+          `UPDATE users SET plan_status = 'active' WHERE id = $1`,
+          [userId],
+        );
+      }
     } else if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
       await pool.query(
         `UPDATE purchases SET status = $2
