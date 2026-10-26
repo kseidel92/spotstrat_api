@@ -107,7 +107,7 @@ if (!primary) {
 }
 
 // Fallback estável via cloud proxy (HOME_API_URL). Não substitui o primary do túnel.
-const cloudUrl = (process.env.STRIPE_CLOUD_WEBHOOK_URL || 'https://spotstratcloud.vercel.app/v1/billing/webhook').trim();
+const cloudUrl = (process.env.STRIPE_CLOUD_WEBHOOK_URL || 'https://cloud-nine-gilt.vercel.app/v1/billing/webhook').trim();
 if (cloudUrl && !list.data.some((w) => w.url === cloudUrl)) {
   try {
     await stripe.webhookEndpoints.create({

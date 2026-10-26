@@ -336,8 +336,10 @@ sync_public_endpoints() {
   log "Sync marcado em $SYNCED_FILE"
 }
 
+CLOUD_PUBLIC_URL="${SPOTSTRAT_CLOUD_URL:-https://cloud-nine-gilt.vercel.app}"
+
 cloud_proxy_ok() {
-  curl -fsS --max-time 12 "https://spotstratcloud.vercel.app/v1/health" >/dev/null 2>&1
+  curl -fsS --max-time 12 "$CLOUD_PUBLIC_URL/v1/health" >/dev/null 2>&1
 }
 
 bring_up() {
@@ -351,7 +353,7 @@ bring_up() {
   log "Pronto."
   log "  API     http://127.0.0.1:7171/v1/health"
   log "  Túnel   $(current_tunnel)"
-  log "  Cloud   https://spotstratcloud.vercel.app/v1/health"
+  log "  Cloud   $CLOUD_PUBLIC_URL/v1/health"
   if [[ "$WITH_FRONT" -eq 1 ]]; then
     log "  Front   http://127.0.0.1:7172/"
   fi
