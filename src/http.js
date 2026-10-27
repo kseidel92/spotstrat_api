@@ -530,6 +530,14 @@ function createHttp(desk) {
     });
   });
 
+  app.get('/v1/site', async (_req, res) => {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS accounts FROM users WHERE lower(email) <> lower($1)`,
+      [GUEST_EMAIL],
+    );
+    res.json({ accounts: rows[0]?.accounts || 0 });
+  });
+
   app.get('/v1/billing/plans', (_req, res) => {
     res.json(catalog());
   });
