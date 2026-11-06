@@ -205,19 +205,20 @@ function unaskedEma(text, recipe) {
 }
 
 function optionNote(options) {
-  if (!options || options.guided) return '';
+  if (!options) return '';
   const lines = [];
   const stop = Number(options.stopPct);
   const target = Number(options.tpPct);
   const hold = Number(options.maxHoldMin);
+  // Guided wizards still send authoritative manual exits — honor them.
   if (options.exit === 'manual' && stop > 0 && target > 0) {
     lines.push(`A pessoa já escolheu o stop de ${stop}% e o alvo de ${target}% a partir da entrada. O código usa esses percentuais. Não troque por outro.`);
-  } else if (options.exit === 'history' && !options.historyApplied) {
+  } else if (!options.guided && options.exit === 'history' && !options.historyApplied) {
     lines.push('A pessoa pediu stop e alvo medidos nas velas de 18 meses. Esse arquivo é só de velas, sem livro e sem tape. Não invente percentual de stop nem de alvo. No buy, use stop: null e target: null.');
   }
   if (options.timeExit && options.time === 'manual' && hold > 0) {
     lines.push(`A pessoa já escolheu fechar a posição depois de ${hold} minutos se o stop e o alvo não saírem. Venda quando ctx.position.minutesHeld chegar a ${hold}.`);
-  } else if (options.timeExit && options.time === 'history' && !options.historyApplied) {
+  } else if (!options.guided && options.timeExit && options.time === 'history' && !options.historyApplied) {
     lines.push('A pessoa pediu o tempo de saída medido nessas mesmas velas. Não invente um prazo em minutos.');
   } else if (options.timeExit === false) {
     lines.push('A pessoa não pediu saída por tempo. Não feche a posição só porque passou um número de minutos.');
@@ -534,13 +535,19 @@ const GUIDE_SPEC = {
   cross: { entryType: 'cross', sources: ['candles', 'ema'], stopPct: 0.8, tpPct: 1.6, name: 'Cruzamento de médias' },
   breakout: { entryType: 'breakout', sources: ['candles'], stopPct: 1.2, tpPct: 2.2, name: 'Rompimento de faixa' },
   momentum: { entryType: 'momentum', sources: ['candles', 'trades'], stopPct: 1, tpPct: 1.8, name: 'Impulso curto' },
+  pressure: { entryType: 'momentum', sources: ['candles', 'trades', 'book'], stopPct: 0.9, tpPct: 1.6, name: 'Pressão com maré boa' },
+  recovery: { entryType: 'momentum', sources: ['candles', 'trades'], stopPct: 1.4, tpPct: 2.4, name: 'Recuperação após queda' },
+  indicators: { entryType: 'cross', sources: ['candles', 'ema'], stopPct: 1.0, tpPct: 1.8, name: 'Indicadores de alta' },
 };
 
 function guideKindOf(guide) {
   const text = String(guide?.entry || '');
+  const t = text.toLowerCase();
+  if (/press[aã]o|fluxo|livro|tape|obi|mar[eé] boa/.test(t)) return 'pressure';
+  if (/recuper|caiu|queda|dump|rebote|despenc/.test(t)) return 'recovery';
+  if (/indicador|rsi|macd|m[eé]dia|ema|cruz/.test(t) && !/romp|breakout/.test(t)) return 'indicators';
   const known = detectKind(text);
   if (known) return known;
-  const t = text.toLowerCase();
   if (/engulf|engolfo|engolfe|padrão de vela|padrao de vela/.test(t)) return 'pattern';
   if (/\bema\b|cruzamento|cruzar|cruza/.test(t)) return 'cross';
   if (/romp|breakout|máxima das|maxima das/.test(t)) return 'breakout';
@@ -551,12 +558,15 @@ function guideKindOf(guide) {
 }
 
 function guideListOf(guide) {
+  if (guide?.list === 'yes' || guide?.list === 'no') {
+    return { list: guide.list, listText: String(guide.listText || '').trim() };
+  }
   const text = String(guide?.entry || '');
   if (/compra no pr[oó]prio gatilho/i.test(text)) return { list: 'no', listText: '' };
   const records = /\b(registrar|grave|grava(?:r)?)\b/i.test(text)
     && /(n[ií]vel|pre[cç]o|m[aá]xima|m[ií]nima|refer[eê]ncia)/i.test(text);
   const waitsConfirm = /sem comprar ainda|n[aã]o comprar ainda|aguardar.{0,40}confirma|vale por \d|valem por \d/i.test(text);
-  if (records || waitsConfirm) return { list: 'yes', listText: '' };
+  if (records || waitsConfirm) return { list: 'yes', listText: String(guide?.listText || '').trim() };
   return { list: 'no', listText: '' };
 }
 
@@ -575,8 +585,12 @@ function guideSourcesOf(guide, spec) {
 function suggestGuide(guide, step) {
   const kind = guideKindOf(guide || {});
   const spec = GUIDE_SPEC[kind] || GUIDE_SPEC.touches;
-  const catalogued = !['pattern', 'cross', 'breakout', 'momentum'].includes(kind);
-  const base = catalogued ? baseRecipe(kind) : null;
+  const hasSpecExits = spec.stopPct != null && spec.tpPct != null;
+  const catalogued = !hasSpecExits && !['pattern', 'cross', 'breakout', 'momentum', 'pressure', 'recovery', 'indicators'].includes(kind);
+  let base = null;
+  if (catalogued) {
+    try { base = baseRecipe(kind); } catch { base = null; }
+  }
   const allowed = ['entry', 'entryType', 'sources', 'list', 'exit', 'review'];
   const list = guideListOf(guide || {});
   return {
@@ -587,9 +601,9 @@ function suggestGuide(guide, step) {
     list: list.list,
     listText: list.listText,
     exitKind: 'numbers',
-    stop: String(spec.stopPct ?? base.stopPct),
-    target: String(spec.tpPct ?? base.tpPct),
-    name: spec.name || base.name,
+    stop: String(spec.stopPct ?? base?.stopPct ?? 0.8),
+    target: String(spec.tpPct ?? base?.tpPct ?? 1.2),
+    name: spec.name || base?.name || kind,
   };
 }
 

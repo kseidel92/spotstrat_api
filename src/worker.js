@@ -278,7 +278,10 @@ function historyHint(fit, stop, target, hold) {
 
 async function applyHistoryFit(job, result, messages) {
   const options = (job.input || {}).options || {};
-  if (options.guided || options.historyApplied) return result;
+  // Guided + manual exits already carry stop/tp — skip history fit.
+  // Guided + history still runs fit so "measure on candles" stays honest.
+  if (options.historyApplied) return result;
+  if (options.guided && options.exit === 'manual') return result;
   const fitStop = options.exit === 'history';
   const fitHold = !!(options.timeExit && options.time === 'history');
   if (!fitStop && !fitHold) return result;
@@ -385,8 +388,14 @@ async function runJob(job) {
   }
   const shaped = await shapeRecipe(job, result.recipe);
   if (shaped.ask) {
-    await say(job.thread_id, shaped.ask, null);
-    await finish(job, { status: 'needs_user', output: { ask: shaped.ask, provider: result.provider }, detail: shaped.ask });
+    const ask = shaped.ask;
+    const suggestions = ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'];
+    await say(job.thread_id, ask, null);
+    await finish(job, {
+      status: 'needs_user',
+      output: { ask, questions: [ask], suggestions, provider: result.provider },
+      detail: ask,
+    });
     return;
   }
   const recipe = shaped.recipe;

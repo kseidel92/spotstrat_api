@@ -87,6 +87,24 @@ const g15 = suggestGuide({ entry: 'No 5m, em tendência de alta com média de 20
 assert(g15.list === 'no', 'caso 15 sem registrar nível fica sem lista');
 assert(g15.sources.includes('ema'), 'caso 15 mantém médias nas fontes');
 
+const gPressure = suggestGuide({ entry: 'Comprar com pressão compradora no livro e maré boa.', sources: ['candles', 'book', 'trades'], list: 'no' }, 'exit');
+assert(gPressure.kind === 'pressure', 'pressão classifica kind pressure');
+assert(Number(gPressure.stop) > 0 && Number(gPressure.target) > 0, 'pressure devolve stop/alvo do catálogo');
+
+const gListYes = suggestGuide({ entry: 'rompimento', list: 'yes', listText: 'esperar 2 candles verdes' }, 'list');
+assert(gListYes.list === 'yes' && /2 candles/.test(gListYes.listText), 'list/listText do front são honrados');
+
+const briefGuide = `Brief.\nEntrada: No 5m comprar no rompimento.\nFontes: velas fechadas; livro de ofertas.\nLista: não grava preço. A compra acontece no próprio gatilho.\nSaída: Stop 0.9% e alvo 1.6% a partir da entrada.`;
+const codeMissingExit = `function strategy(ctx) { const c = ctx.candles("5m"); if (c.length < 2) return { action: "hold" }; return { action: "buy", stop: ctx.price, target: ctx.price }; }`;
+const guidedAsk = buildJsRecipe(
+  { code: codeMissingExit, ask: '', questions: [], defaults: [], name: 'G', thesis: 't', entryText: 'e', exitText: 'x', risks: '' },
+  briefGuide,
+  'pt-BR',
+  { guided: true, exit: 'manual', stopPct: 0.9, tpPct: 1.6 },
+);
+assert(guidedAsk.ask, 'guided+manual exige stop/alvo no código');
+assert(/0[,.]9/.test(guidedAsk.ask) && /1[,.]6/.test(guidedAsk.ask), 'guided+manual cita stop/alvo escolhidos');
+
 const gRegion = regionAsk('function strategy(ctx){ const c=ctx.candles("15m"); return {action:"hold"}; }', brief05);
 assert(gRegion, '05 exige região por testes nas 48 velas');
 

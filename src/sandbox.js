@@ -560,6 +560,7 @@ function codeHasNumber(code, n) {
 
 function sourceLine(text) {
   const match = String(text || '').match(/^Fontes(?:\s+dispon[ií]veis[^:]*):\s*(.+)$/im)
+    || String(text || '').match(/^Fontes(?:\s+no\s+ctx)?:\s*(.+)$/im)
     || String(text || '').match(/^Fontes:\s*(.+)$/im);
   return match ? match[1] : '';
 }
@@ -568,6 +569,7 @@ function sourceLine(text) {
 function ruleProse(text) {
   let body = String(text || '');
   body = body.replace(/^Fontes(?:\s+dispon[ií]veis[^:]*):.*$/gim, '');
+  body = body.replace(/^Fontes(?:\s+no\s+ctx)?:.*$/gim, '');
   body = body.replace(/^Fontes:.*$/gim, '');
   body = body.replace(/[^.!\n]*(?:arquivo de 18 meses|esse arquivo [eé] s[oó] de velas)[^.!\n]*(?:livro|tape)[^.!\n]*[.!]?/gi, '');
   body = body.replace(/[^.!\n]*\bn[aã]o tem livro[^.!\n]*[.!]?/gi, '');
@@ -687,12 +689,14 @@ function persistAggressionAsk(code, userText) {
 }
 
 function chosenExitAsk(code, options) {
-  if (!options || options.guided) return '';
+  if (!options) return '';
   const stop = Number(options.stopPct);
   const target = Number(options.tpPct);
+  // Always enforce explicit manual exits (including guided wizards).
   if (options.exit === 'manual' && stop > 0 && target > 0 && (!codeHasNumber(code, stop) || !codeHasNumber(code, target))) {
     return `O stop é ${stop}% e o alvo é ${target}% a partir da entrada. Escreva esses percentuais no buy.`;
   }
+  if (options.guided) return '';
   const hold = Number(options.maxHoldMin);
   if (options.timeExit && options.time === 'manual' && hold > 0 && !codeHasNumber(code, hold)) {
     return `Feche a posição quando ctx.position.minutesHeld chegar a ${hold}.`;
