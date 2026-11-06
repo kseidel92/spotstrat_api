@@ -155,7 +155,7 @@ function systemPrompt(locale) {
     'Só use ask/questions quando o gatilho em si for incompreensível (não dá para saber o que comprar). Uma pergunta curta, em linguagem simples, com sugestões implícitas. Nunca pergunte só por stop, alvo, período de média, lookback ou volatilidade.',
     'Quando o pedido for claro o bastante para montar qualquer regra razoável, escreva o código numa passada. Não troque um stop ou um alvo que a pessoa já deu por outro.',
     'Stop, alvo ou tempo que a pessoa pediu para medir nas velas de 18 meses: escreva a entrada e deixe stop e target nulos até a busca informar. O arquivo de 18 meses é só de velas: não tem livro nem tape.',
-    'Nunca escreva "como você escolheu" para stop/alvo que a pessoa não digitou. Se você completou com o padrão do produto, diga isso. Se a busca histórica preencheu, diga que veio da busca.',
+    'Nunca escreva "como você escolheu", "como você escreveu", "como pediu", "seus números" nem "sem trocar seus números" para stop/alvo que a pessoa não digitou. Se você completou com o padrão do produto, diga isso. Se a busca histórica preencheu, diga que veio da busca nas velas.',
     'Filtro de maré do desk (só maré boa / evitar maré ruim) NÃO se implementa no código. Sem ctx.pct24 como maré, sem EMA de "tide/humor". O desk já bloqueia antes de chamar strategy(ctx).',
     'No campo defaults, liste o que você assumiu (label + value), para a UI mostrar "usei estes padrões". Não use defaults no lugar do código.',
     'Perguntas ao usuário (ask/questions) são só em linguagem humana simples. Nunca peça para usar ctx.sma, function strategy, Declare no thesis, ou outras instruções de código.',

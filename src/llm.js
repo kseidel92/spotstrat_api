@@ -210,12 +210,19 @@ function optionNote(options) {
   const stop = Number(options.stopPct);
   const target = Number(options.tpPct);
   const hold = Number(options.maxHoldMin);
-  // Guided wizards still send authoritative manual exits — honor them.
-  if (options.exit === 'manual' && stop > 0 && target > 0) {
+  // After history fit, % are measured — never tell the model the person typed them.
+  if (options.historyApplied && stop > 0 && target > 0) {
+    lines.push(
+      `Stop ${stop}% e alvo ${target}% VIERAM DA BUSCA HISTÓRICA nas velas de 18 meses — a pessoa NÃO digitou esses percentuais. `
+      + 'O código usa exatamente esses %. No thesis/exit/risks diga que vieram da busca nas velas. '
+      + 'Nunca escreva "como você escolheu", "como você escreveu", "como pediu", "seus números" nem "sem trocar seus números".',
+    );
+  } else if (options.exit === 'manual' && stop > 0 && target > 0) {
+    // Guided wizards / explicit % in the prompt — honor them.
     lines.push(`A pessoa já escolheu o stop de ${stop}% e o alvo de ${target}% a partir da entrada. O código usa esses percentuais. Não troque por outro.`);
   } else if (!options.guided && options.exit === 'history' && !options.historyApplied) {
     lines.push('A pessoa pediu stop e alvo medidos nas velas de 18 meses. Esse arquivo é só de velas, sem livro e sem tape. Não invente percentual de stop nem de alvo. No buy, use stop: null e target: null.');
-    lines.push('Nunca escreva "como você escolheu" nem "como pedido" para stop/alvo que a pessoa não digitou. Se a busca histórica completar os %, diga que vieram da busca nas velas.');
+    lines.push('Nunca escreva "como você escolheu", "como você escreveu", "como pediu" nem "seus números" para stop/alvo que a pessoa não digitou. Se a busca histórica completar os %, diga que vieram da busca nas velas.');
   }
   if (options.timeExit && options.time === 'manual' && hold > 0) {
     lines.push(`A pessoa já escolheu fechar a posição depois de ${hold} minutos se o stop e o alvo não saírem. Venda quando ctx.position.minutesHeld chegar a ${hold}.`);

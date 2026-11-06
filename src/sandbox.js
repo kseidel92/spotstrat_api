@@ -903,17 +903,7 @@ function buildJsRecipe(data, userText, locale, options) {
     let out = String(s || '');
     // Only rewrite attribution when the person did NOT write stop/target %.
     if (userStop == null && userTarget == null) {
-      out = out
-        .replace(/como você escolheu/gi, 'pela busca nas velas')
-        .replace(/como vc escolheu/gi, 'pela busca nas velas')
-        .replace(/conforme o pedido/gi, 'pela busca nas velas')
-        .replace(/conforme pedido/gi, 'pela busca nas velas')
-        .replace(/como pedido/gi, 'pela busca nas velas')
-        .replace(/como você pediu/gi, 'pela busca nas velas')
-        .replace(/como vc pediu/gi, 'pela busca nas velas')
-        .replace(/foram os que a pessoa (?:pediu|escolheu|definiu|escreveu)/gi, 'vieram da busca nas velas')
-        .replace(/que a pessoa (?:pediu|escolheu|definiu|escreveu)/gi, 'da busca nas velas')
-        .replace(/a pessoa (?:pediu|escolheu|definiu|escreveu)/gi, 'a busca nas velas deu');
+      out = scrubFalseExitClaims(out);
     }
     return out;
   };
@@ -941,12 +931,15 @@ function buildJsRecipe(data, userText, locale, options) {
       assumptions.push({ label: 'alvo', value: `${DEFAULT_TARGET_PCT}%` });
     }
   }
+  const fromCode = exitPctFromCode(code);
+  const stopPct = fromCode.stopPct != null ? fromCode.stopPct : (userStop != null ? userStop : 1);
+  const tpPct = fromCode.tpPct != null ? fromCode.tpPct : (userTarget != null ? userTarget : 1);
   const recipe = {
     name,
     explanation: { [locale || 'pt-BR']: text, en: text },
     entry: { all: [{ op: 'script' }], any: [] },
     filters: [],
-    exit: { stopPct: 1, tpPct: 1, maxHoldMin: 1440, timeExit: false },
+    exit: { stopPct, tpPct, maxHoldMin: 1440, timeExit: false },
     pacing: { noRepeatMin: 15, stopCooldownMin: 30 },
     plan: { kind: 'js', exact: true },
     defaults,
@@ -956,6 +949,38 @@ function buildJsRecipe(data, userText, locale, options) {
   const check = validateRecipe(recipe);
   if (!check.ok) return { ask: 'Não fechei a estratégia.', retry: true };
   return { recipe };
+}
+
+/** Stop/alvo embutidos no JS (`1 - X / 100` / `1 + Y / 100`). */
+function exitPctFromCode(code) {
+  const src = String(code || '');
+  const stopMatch = src.match(/stop\s*:\s*[^,\n}]*?1\s*-\s*(\d+(?:\.\d+)?)\s*\/\s*100/i)
+    || src.match(/1\s*-\s*(\d+(?:\.\d+)?)\s*\/\s*100/);
+  const targetMatch = src.match(/target\s*:\s*[^,\n}]*?1\s*\+\s*(\d+(?:\.\d+)?)\s*\/\s*100/i)
+    || src.match(/1\s*\+\s*(\d+(?:\.\d+)?)\s*\/\s*100/);
+  return {
+    stopPct: stopMatch ? Number(stopMatch[1]) : null,
+    tpPct: targetMatch ? Number(targetMatch[1]) : null,
+  };
+}
+
+/** Remove claims that attribute measured/default exits to the user. */
+function scrubFalseExitClaims(text) {
+  return String(text || '')
+    .replace(/como você escolheu/gi, 'pela busca nas velas')
+    .replace(/como vc escolheu/gi, 'pela busca nas velas')
+    .replace(/como você escreveu/gi, 'pela busca nas velas')
+    .replace(/como vc escreveu/gi, 'pela busca nas velas')
+    .replace(/como você pediu/gi, 'pela busca nas velas')
+    .replace(/como vc pediu/gi, 'pela busca nas velas')
+    .replace(/conforme o pedido/gi, 'pela busca nas velas')
+    .replace(/conforme pedido/gi, 'pela busca nas velas')
+    .replace(/como pedido/gi, 'pela busca nas velas')
+    .replace(/sem trocar seus n[uú]meros/gi, 'mantendo os percentuais da busca nas velas')
+    .replace(/seus n[uú]meros/gi, 'os percentuais da busca nas velas')
+    .replace(/foram os que a pessoa (?:pediu|escolheu|definiu|escreveu)/gi, 'vieram da busca nas velas')
+    .replace(/que a pessoa (?:pediu|escolheu|definiu|escreveu)/gi, 'da busca nas velas')
+    .replace(/a pessoa (?:pediu|escolheu|definiu|escreveu)/gi, 'a busca nas velas deu');
 }
 
 function writeStrategyFile(strategyId, code) {
@@ -1062,8 +1087,18 @@ function decideJs(strategy, row, position, price, now, snap) {
   }
 }
 
+function syncExitFromCode(recipe) {
+  if (!recipe || !recipe.code) return recipe;
+  const fromCode = exitPctFromCode(recipe.code);
+  if (!recipe.exit) recipe.exit = { stopPct: 1, tpPct: 1, maxHoldMin: 1440, timeExit: false };
+  if (fromCode.stopPct != null) recipe.exit.stopPct = fromCode.stopPct;
+  if (fromCode.tpPct != null) recipe.exit.tpPct = fromCode.tpPct;
+  return recipe;
+}
+
 module.exports = {
   sma, ema, rsi, atr, bb, macd, stoch, vwap, highest, lowest, crossedUp,
   validateCode, checkNumbers, buildJsRecipe, writeStrategyFile, scanJs, decideJs, runCode, makeCtx,
   returnAsk, regionAsk, bookCoverageAsk, tradesCoverageAsk, averagesCoverageAsk, reversalAsk, persistAggressionAsk,
+  exitPctFromCode, scrubFalseExitClaims, syncExitFromCode,
 };

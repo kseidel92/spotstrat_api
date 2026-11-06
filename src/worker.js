@@ -1,7 +1,7 @@
 const { pool } = require('./db');
 const { completeRecipe } = require('./llm');
 const { id, emptySnap, walletOf, netRR, MIN_NET_RR, validateRecipe, alarmSoundKind } = require('./shared');
-const { writeStrategyFile } = require('./sandbox');
+const { writeStrategyFile, syncExitFromCode } = require('./sandbox');
 const lab = require('./lab');
 const bus = require('./bus');
 
@@ -218,6 +218,7 @@ function variantRecipes(recipe, picked = 'any') {
 }
 
 async function saveRecipe(job, recipe, extra = {}) {
+  syncExitFromCode(recipe);
   const input = job.input || {};
   const mareMode = extra.mareMode || (input.strategyId && !extra.forceNew ? null : 'any');
   let strategyId = extra.forceNew ? null : (input.strategyId || null);
@@ -322,15 +323,22 @@ async function applyHistoryFit(job, result, messages) {
     exitHint: hint,
   });
   if (again.recipe) {
+    const { scrubFalseExitClaims, syncExitFromCode } = require('./sandbox');
     const loc = (job.input || {}).locale || 'pt-BR';
     const block = (again.recipe.explanation && (again.recipe.explanation[loc] || again.recipe.explanation.en)) || {};
-    const scrub = (s) => String(s || '')
-      .replace(/como você escolheu/gi, 'pela busca nas velas de 18 meses')
-      .replace(/como vc escolheu/gi, 'pela busca nas velas de 18 meses');
+    const scrub = (s) => scrubFalseExitClaims(s)
+      .replace(/pela busca nas velas(?! de 18)/gi, 'pela busca nas velas de 18 meses');
     block.exit = `${scrub(block.exit)} ${shown}`.trim();
     block.thesis = scrub(block.thesis);
     block.risks = `${scrub(block.risks)} O arquivo de 18 meses é só de velas.`.trim();
     again.recipe.explanation = { ...(again.recipe.explanation || {}), [loc]: block, en: { ...block } };
+    // Keep recipe.exit aligned with % actually embedded in the JS (or the fit).
+    syncExitFromCode(again.recipe);
+    if (!again.recipe.exit) again.recipe.exit = {};
+    if (fitStop) {
+      again.recipe.exit.stopPct = stop;
+      again.recipe.exit.tpPct = target;
+    }
   }
   // Never bubble internal model-retry asks to needs_user from history rewrite.
   if (again.ask && !again.recipe) {
