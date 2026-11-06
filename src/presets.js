@@ -100,7 +100,7 @@ const PRESETS = [
   {
     presetKey: 'queda-livro',
     type: 'dump_rebound',
-    name: 'Rebote depois da queda'
+    name: 'Rebote depois da queda',
     mareMode: 'any',
     description: 'Queda de 10% em 30 minutos entra numa lista de 1 hora. O rebote compra com livro, tape e uma vela verde.',
     explanation: {
@@ -142,7 +142,7 @@ const PRESETS = [
   {
     presetKey: 'mare-fundo-livro',
     type: 'mare_fundo',
-    name: 'Compra na recuperação do mercado'
+    name: 'Compra na recuperação do mercado',
     mareMode: 'good',
     description: 'Com a maré boa, compra a alt mais caída em 7 dias, desde que o livro confirme.',
     explanation: {
@@ -177,7 +177,7 @@ const PRESETS = [
   {
     presetKey: 'anomalia-livro',
     type: 'anomalia',
-    name: 'Pulo rápido de preço'
+    name: 'Pulo rápido de preço',
     mareMode: 'any',
     description: 'Spike de 15 minutos entre 3% e 10%, volume em dobro, à frente do BTC, com livro e tape mornos.',
     explanation: {
@@ -218,7 +218,7 @@ const PRESETS = [
   {
     presetKey: 'oscila-largo',
     type: 'oscila',
-    name: 'Sobe e desce com stop largo'
+    name: 'Sobe e desce com stop largo',
     mareMode: 'any',
     description: 'Serra de 120 minutos, faixa de pelo menos 8%. Stop 4%, alvo 6%, 12 horas. Não é a caixa de 3 toques.',
     explanation: {
