@@ -900,15 +900,24 @@ function buildJsRecipe(data, userText, locale, options) {
   const userStop = namedExitPct(userText, 'stop');
   const userTarget = namedExitPct(userText, 'target');
   const scrubClaim = (s) => {
-    let out = String(s || '')
-      .replace(/como você escolheu/gi, 'pelo padrão do produto / busca no histórico')
-      .replace(/como vc escolheu/gi, 'pelo padrão do produto / busca no histórico');
-    // If the person did not write stop/target %, never claim they chose those numbers.
-    if (userStop == null) {
-      out = out.replace(/stop[^.]*como pedido/gi, (chunk) => chunk.replace(/como pedido/gi, 'pelo padrão do produto'));
-    }
-    if (userTarget == null) {
-      out = out.replace(/(?:alvo|target)[^.]*como pedido/gi, (chunk) => chunk.replace(/como pedido/gi, 'pelo padrão do produto'));
+    let out = String(s || '');
+    // Only rewrite attribution when the person did NOT write stop/target %.
+    if (userStop == null && userTarget == null) {
+      out = out
+        .replace(/como você escolheu/gi, 'pela busca nas velas / padrão do produto')
+        .replace(/como vc escolheu/gi, 'pela busca nas velas / padrão do produto')
+        .replace(/conforme o pedido/gi, 'pela busca nas velas / padrão do produto')
+        .replace(/conforme pedido/gi, 'pela busca nas velas / padrão do produto')
+        .replace(/como pedido/gi, 'pela busca nas velas / padrão do produto')
+        .replace(/como você pediu/gi, 'pela busca nas velas / padrão do produto')
+        .replace(/como vc pediu/gi, 'pela busca nas velas / padrão do produto');
+      out = out.replace(/\b(?:stop|alvo|target)[^.!?\n]{0,80}\b(?:pediu|escolheu|definiu|escreveu)\b/gi, (chunk) => (
+        chunk
+          .replace(/\bpediu\b/gi, 'veio da busca/padrão')
+          .replace(/\bescolheu\b/gi, 'veio da busca/padrão')
+          .replace(/\bdefiniu\b/gi, 'veio da busca/padrão')
+          .replace(/\bescreveu\b/gi, 'veio da busca/padrão')
+      ));
     }
     return out;
   };
