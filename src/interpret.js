@@ -414,7 +414,11 @@ function interpret(text) {
 }
 
 function refusesSwap(text) {
-  return /n[aã]o troca|n[aã]o crio|n[aã]o cria|sem mudar|exatamente a regra|n[aã]o substitui/i.test(String(text || ''));
+  // Só recusa troca quando a mensagem inteira é uma recusa curta.
+  // Clarificações longas (ou respostas que colam um ask antigo) não podem travar a thread.
+  const t = String(text || '').trim();
+  if (t.length > 120) return false;
+  return /^(n[aã]o troca|n[aã]o crio|n[aã]o cria|sem mudar|exatamente a regra|n[aã]o substitui)\b/i.test(t);
 }
 
 module.exports = { interpret, refusesSwap, titleFrom };

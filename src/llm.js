@@ -215,6 +215,7 @@ function optionNote(options) {
     lines.push(`A pessoa já escolheu o stop de ${stop}% e o alvo de ${target}% a partir da entrada. O código usa esses percentuais. Não troque por outro.`);
   } else if (!options.guided && options.exit === 'history' && !options.historyApplied) {
     lines.push('A pessoa pediu stop e alvo medidos nas velas de 18 meses. Esse arquivo é só de velas, sem livro e sem tape. Não invente percentual de stop nem de alvo. No buy, use stop: null e target: null.');
+    lines.push('Nunca escreva "como você escolheu" nem "como pedido" para stop/alvo que a pessoa não digitou. Se a busca histórica completar os %, diga que vieram da busca nas velas.');
   }
   if (options.timeExit && options.time === 'manual' && hold > 0) {
     lines.push(`A pessoa já escolheu fechar a posição depois de ${hold} minutos se o stop e o alvo não saírem. Venda quando ctx.position.minutesHeld chegar a ${hold}.`);
@@ -223,7 +224,20 @@ function optionNote(options) {
   } else if (options.timeExit === false) {
     lines.push('A pessoa não pediu saída por tempo. Não feche a posição só porque passou um número de minutos.');
   }
+  if (options.mareMode === 'good' || options.mareMode === 'not_bad') {
+    lines.push(
+      `A pessoa já pediu filtro de maré do desk (${options.mareMode === 'good' ? 'só maré boa' : 'evitar maré ruim'}). `
+      + 'NÃO implemente maré no código: sem ctx.pct24, sem EMA usada como "maré/tide", sem humor inventado. '
+      + 'O desk já bloqueia a entrada fora dessa maré antes de chamar strategy(ctx).',
+    );
+  }
   return lines.join('\n');
+}
+
+/** Asks meant for the model retry loop — never show these to the end user. */
+function isInternalAsk(ask) {
+  return /ctx\.(sma|ema|vwap|rsi|trades|book|memory|atr|candles)|function strategy|Declare no thesis|Escreva o código|Não pergunte|Não crio uma estratégia diferente|Use ctx\.|Remova do código|mare_mode|stop: null|candles\.volume|ATR\(14\)|O filtro de maré já está|O pedido cita média|O pedido descreve|O pedido pede média/i
+    .test(String(ask || ''));
 }
 
 function settle(data, { messages, locale, current, mode, options }) {
@@ -433,10 +447,20 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
     }
   }
   if (settled.recipe) return { ...settled, provider };
+  // Internal retry asks must never leak to the UI as needs_user questions.
+  if (settled.ask && isInternalAsk(settled.ask)) {
+    return {
+      ask: 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela (ex.: sobe 1% em 3 minutos). Se quiser, diga também o stop e o alvo em %.',
+      questions: ['Quando a estratégia deve comprar?'],
+      suggestions: ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'],
+      provider,
+    };
+  }
   if (settled.ask && !vagueAsk(settled)) return { ...settled, provider };
   return {
     ask: 'Não fechei o código. Reenvia o gatilho que eu escrevo de novo.',
     questions: ['Qual é o gatilho de entrada, com a porcentagem e o tempo?'],
+    suggestions: ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'],
     provider,
   };
 }
@@ -608,5 +632,5 @@ function suggestGuide(guide, step) {
 }
 
 module.exports = {
-  completeRecipe, completeLabChat, mockComplete, settle, parseModelJson, CATALOG, detectKind, baseRecipe, suggestGuide,
+  completeRecipe, completeLabChat, mockComplete, settle, parseModelJson, isInternalAsk, CATALOG, detectKind, baseRecipe, suggestGuide,
 };

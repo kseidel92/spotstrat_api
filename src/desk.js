@@ -606,6 +606,8 @@ function createDesk(hub) {
     if (!ready) return;
     const now = Date.now();
     const focused = bus.focused ? bus.focused() : new Set();
+    const mare = hub.mareFor({});
+    let n = 0;
     for (const run of runners.values()) {
       try {
         if (!userActive(run.userId)) continue;
@@ -634,14 +636,11 @@ function createDesk(hub) {
         rollHalt(run.snap, price);
         if (run.snap.position || run.strategy.paused || run.snap.halted) {
           if (focused.has(run.strategy.id) && now - lastScan > 2000) {
-            const user = users.get(run.userId);
-            const mare = hub.mareFor({});
             const evaluated = evaluateStrategy(run.strategy, hub, mare);
             bus.emit('push', { userId: run.userId, msg: { type: 'scan', strategyId: run.strategy.id, rows: evaluated.scan, blocked: run.strategy.paused ? 'paused' : run.snap.halted ? 'halt' : 'in_position' } });
           }
           continue;
         }
-        const mare = hub.mareFor({});
         if (!run.snap.watch) run.snap.watch = {};
         if (!run.snap.loss) run.snap.loss = {};
         const evaluated = evaluateStrategy(run.strategy, hub, mare, run.snap);
@@ -657,6 +656,9 @@ function createDesk(hub) {
         console.error('[desk] runner', run.strategy.id, err.message);
         run.strategy.paused = true;
       }
+      n += 1;
+      // Cede o event loop a cada estratégia — senão o HTTP (cadastro) fica sem vez.
+      if (n % 3 === 0) await new Promise((r) => setImmediate(r));
     }
     if (now - lastScan > 2000) lastScan = now;
     if (now - alarmScanAt > 2000) {
@@ -860,16 +862,26 @@ function createDesk(hub) {
     }).catch(() => {});
   }
 
+  let ticking = false;
+  let tickCursor = 0;
+  const TICK_BATCH = Number(process.env.DESK_TICK_BATCH || 20);
+
   function start() {
     loadAll().then(() => {
       ready = true;
       console.log(`[desk] ${runners.size} estratégias reidratadas`);
     }).catch((err) => console.error('[desk] load', err));
-    timer = setInterval(() => { tick().catch((err) => console.error('[desk] tick', err)); }, 1000);
+    // Não empilha ticks: se um tick passar do intervalo, o próximo é pulado (evita 100% CPU e starve HTTP).
+    timer = setInterval(() => {
+      if (ticking) return;
+      ticking = true;
+      tick()
+        .catch((err) => console.error('[desk] tick', err))
+        .finally(() => { ticking = false; });
+    }, 2000);
     setInterval(() => {
       for (const userId of users.keys()) {
         if (!bus.hasUser || !bus.hasUser(userId)) continue;
-        const user = users.get(userId);
         bus.emit('push', { userId, msg: { type: 'prices', prices: hub.prices(), connection: hub.status } });
         bus.emit('push', { userId, msg: { type: 'mare', mare: hub.mareFor({}) } });
       }

@@ -1180,22 +1180,58 @@ function cleanChannels(raw) {
   };
 }
 
-function cleanOptions(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const exit = raw.exit === 'manual' ? 'manual' : 'history';
+/** Pull mare / stop / target from free-text so options stay coherent with the prompt. */
+function extractPromptOptions(prompt) {
+  const text = String(prompt || '');
+  const out = {};
+  if (/\b(?:s[oó]\s+)?(?:em\s+)?mar[eé]\s+boa\b|\bonly\s+good\s+tide\b|\bmar[eé]\s+de\s+alta\b/i.test(text)) {
+    out.mareMode = 'good';
+  } else if (/\bmar[eé]\s+n[aã]o\s+ruim\b|\bnot\s+bad\s+tide\b|\bevit(?:ar|e)\s+mar[eé]\s+ruim\b/i.test(text)) {
+    out.mareMode = 'not_bad';
+  }
+  const stop = text.match(/\bstop\b(?:\s*(?:de|em)?|\s+)(\d+(?:[.,]\d+)?)\s*%/i)
+    || text.match(/(\d+(?:[.,]\d+)?)\s*%\s*(?:de\s+)?(?:abaixo[^\n%]{0,20})?\bstop\b/i);
+  const target = text.match(/\b(?:alvo|target|tp)\b(?:\s*(?:de|em)?|\s+)(\d+(?:[.,]\d+)?)\s*%/i)
+    || text.match(/(\d+(?:[.,]\d+)?)\s*%\s*(?:de\s+)?\b(?:alvo|target|tp)\b/i)
+    || text.match(/\bno alvo de\s+(\d+(?:[.,]\d+)?)\s*%/i);
+  if (stop) out.stopPct = Number(String(stop[1]).replace(',', '.'));
+  if (target) out.tpPct = Number(String(target[1]).replace(',', '.'));
+  if (out.stopPct > 0 && out.tpPct > 0) out.exit = 'manual';
+  return out;
+}
+
+function cleanOptions(raw, prompt = '') {
+  if (!raw || typeof raw !== 'object') {
+    const fromText = extractPromptOptions(prompt);
+    if (!Object.keys(fromText).length) return null;
+    raw = fromText;
+  }
+  const fromText = extractPromptOptions(prompt);
+  const guided = !!raw.guided;
+  let exit = raw.exit === 'manual' ? 'manual' : 'history';
+  let stopPct = raw.stopPct == null ? null : Number(raw.stopPct);
+  let tpPct = raw.tpPct == null ? null : Number(raw.tpPct);
+  let mareMode = ['any', 'good', 'not_bad'].includes(raw.mareMode) ? raw.mareMode : 'any';
+  // Free-text wins over defaults when the wizard did not lock values (unguided prompt).
+  if (!guided) {
+    if (fromText.mareMode) mareMode = fromText.mareMode;
+    if (fromText.stopPct > 0) stopPct = fromText.stopPct;
+    if (fromText.tpPct > 0) tpPct = fromText.tpPct;
+    if (fromText.exit === 'manual') exit = 'manual';
+  }
   const time = raw.time === 'manual' ? 'manual' : 'history';
   return {
     exit,
-    stopPct: raw.stopPct == null ? null : Number(raw.stopPct),
-    tpPct: raw.tpPct == null ? null : Number(raw.tpPct),
+    stopPct,
+    tpPct,
     timeExit: !!raw.timeExit,
     time,
     maxHoldMin: raw.maxHoldMin == null ? null : Number(raw.maxHoldMin),
     variants: !!raw.variants,
-    mareMode: ['any', 'good', 'not_bad'].includes(raw.mareMode) ? raw.mareMode : 'any',
+    mareMode,
     channels: cleanChannels(raw.channels || {}),
     wallet: raw.wallet == null || raw.wallet === '' ? 1000 : walletOf(raw.wallet),
-    guided: !!raw.guided,
+    guided,
     autoFill: raw.autoFill !== false,
   };
 }
@@ -1306,7 +1342,7 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
         locale: req.profile.locale || 'pt-BR',
         strategyId,
         mode: strategyId ? 'trade' : (req.body.mode === 'alarm' || /\b(me\s+avis\w*|alarme|alerta)\b/i.test(prompt) ? 'alarm' : 'trade'),
-        options: cleanOptions(req.body.options),
+        options: cleanOptions(req.body.options, prompt),
       }),
       thread,
       strategyId,

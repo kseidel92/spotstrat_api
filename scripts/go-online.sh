@@ -24,7 +24,10 @@ WATCH=0
 WITH_FRONT=0
 DO_PUSH=1
 DO_DEPLOY=1
-INTERVAL="${KEEP_ONLINE_INTERVAL:-12}"
+INTERVAL="${KEEP_ONLINE_INTERVAL:-8}"
+LOCK_FILE="$ROOT/run/go-online.lock"
+API_FAILS=0
+API_FAIL_LIMIT="${KEEP_API_FAIL_LIMIT:-2}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -41,37 +44,73 @@ done
 
 mkdir -p "$ROOT/run"
 
-log() { printf '[go-online] %s\n' "$*" | tee -a "$WATCH_LOG" >/dev/null; printf '[go-online] %s\n' "$*"; }
+# Um watcher só — dois processos se matam (API sobe/cai em loop).
+if [[ "$WATCH" -eq 1 ]]; then
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    echo "[go-online] já há um --watch ativo (lock $LOCK_FILE); saindo."
+    exit 0
+  fi
+fi
+
+log() {
+  # Uma linha no keep.log + stdout (evita tee duplicar se stdout já for o log).
+  local line
+  line="$(printf '[go-online] %s' "$*")"
+  printf '%s\n' "$line" >>"$WATCH_LOG"
+  printf '%s\n' "$line"
+}
 
 current_tunnel() {
   tr -d '[:space:]' < "$URL_FILE" 2>/dev/null || true
 }
 
+api_listening() {
+  ss -ltn 2>/dev/null | grep -qE '[:.]7171\s' || return 1
+}
+
+api_pid_alive() {
+  [[ -f "$API_PID" ]] || return 1
+  kill -0 "$(cat "$API_PID" 2>/dev/null)" 2>/dev/null
+}
+
 api_ok() {
-  curl -fsS --max-time 3 "http://127.0.0.1:7171/v1/health" >/dev/null 2>&1
+  curl -fsS --max-time 8 "http://127.0.0.1:7171/v1/health" >/dev/null 2>&1
+}
+
+tunnel_process_ok() {
+  pgrep -f 'cloudflared tunnel --url http://127.0.0.1:7171' >/dev/null 2>&1
 }
 
 tunnel_ok() {
   local url
   url="$(current_tunnel)"
   [[ -n "$url" ]] || return 1
-  curl -fsS --max-time 10 "$url/v1/health" >/dev/null 2>&1
+  # Só conta se a origem local também responde — senão é API caída, não túnel.
+  api_ok || return 1
+  curl -fsS --max-time 12 "$url/v1/health" >/dev/null 2>&1
+}
+
+capture_tunnel_url() {
+  if [[ -f "$ROOT/cloudflare/tunnel.log" ]]; then
+    local found
+    found="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$ROOT/cloudflare/tunnel.log" 2>/dev/null | tail -1 || true)"
+    if [[ -n "$found" && "$found" != "$(current_tunnel)" ]]; then
+      echo -n "$found" >"$URL_FILE"
+      log "URL do túnel capturada do log → $found"
+    fi
+  fi
 }
 
 wait_tunnel() {
-  local i
-  for i in $(seq 1 36); do
-    if tunnel_ok; then
+  local i max="${1:-20}"
+  for i in $(seq 1 "$max"); do
+    capture_tunnel_url
+    # Durante subida do túnel, health remoto basta (API já deve estar ok).
+    local url
+    url="$(current_tunnel)"
+    if [[ -n "$url" ]] && curl -fsS --max-time 8 "$url/v1/health" >/dev/null 2>&1; then
       return 0
-    fi
-    # se o log do quick tunnel já tem URL nova, atualiza o arquivo
-    if [[ -f "$ROOT/cloudflare/tunnel.log" ]]; then
-      local found
-      found="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$ROOT/cloudflare/tunnel.log" 2>/dev/null | tail -1 || true)"
-      if [[ -n "$found" && "$found" != "$(current_tunnel)" ]]; then
-        echo -n "$found" >"$URL_FILE"
-        log "URL do túnel capturada do log → $found"
-      fi
     fi
     sleep 1
   done
@@ -97,20 +136,58 @@ ensure_postgres() {
   log "WARN: Postgres demorou; seguindo mesmo assim"
 }
 
+kill_api_soft() {
+  local pid old i
+  pid=""
+  if [[ -f "$API_PID" ]]; then
+    pid="$(cat "$API_PID" 2>/dev/null || true)"
+  fi
+  if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+    for i in $(seq 1 16); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.5
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      log "API pid $pid não saiu — SIGKILL"
+      kill -KILL "$pid" 2>/dev/null || true
+      sleep 0.5
+    fi
+  fi
+  old="$(ss -ltnp 2>/dev/null | awk '/:7171 / {print $NF}' | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true)"
+  if [[ -z "${old:-}" ]]; then
+    old="$(ss -ltnp 2>/dev/null | awk '/:7171 / {print $NF}' | grep -oE '[0-9]+' | head -1 || true)"
+  fi
+  if [[ -n "${old:-}" ]] && kill -0 "$old" 2>/dev/null; then
+    kill -TERM "$old" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$old" 2>/dev/null || true
+  fi
+  rm -f "$API_PID"
+}
+
 start_api() {
   if api_ok; then
+    API_FAILS=0
     return 0
   fi
-  if [[ -f "$API_PID" ]] && kill -0 "$(cat "$API_PID")" 2>/dev/null; then
-    log "API PID vivo mas health falhou — reiniciando"
-    kill "$(cat "$API_PID")" 2>/dev/null || true
-    sleep 1
-  fi
-  local old
-  old="$(ss -ltnp 2>/dev/null | awk '/:7171 / {print $NF}' | grep -oE '[0-9]+' | head -1 || true)"
-  if [[ -n "${old:-}" ]]; then
-    kill "$old" 2>/dev/null || true
-    sleep 1
+  # PID vivo + porta aberta + health falhou uma vez: espera (boot/desk), não mata.
+  if api_pid_alive && api_listening; then
+    log "API ainda subindo (pid $(cat "$API_PID")) — aguardando health"
+    local _
+    for _ in $(seq 1 30); do
+      if api_ok; then
+        API_FAILS=0
+        log "API ok (pid $(cat "$API_PID"))"
+        return 0
+      fi
+      sleep 1
+    done
+    log "API travada no boot — reiniciando"
+    kill_api_soft
+  elif api_pid_alive; then
+    log "API PID vivo sem porta — reiniciando"
+    kill_api_soft
   fi
   log "Subindo API…"
   (
@@ -119,8 +196,9 @@ start_api() {
     echo $! >"$API_PID"
   )
   local _
-  for _ in $(seq 1 40); do
+  for _ in $(seq 1 60); do
     if api_ok; then
+      API_FAILS=0
       log "API ok (pid $(cat "$API_PID"))"
       return 0
     fi
@@ -132,16 +210,7 @@ start_api() {
 }
 
 restart_api() {
-  if [[ -f "$API_PID" ]]; then
-    kill "$(cat "$API_PID")" 2>/dev/null || true
-    rm -f "$API_PID"
-  fi
-  local old
-  old="$(ss -ltnp 2>/dev/null | awk '/:7171 / {print $NF}' | grep -oE '[0-9]+' | head -1 || true)"
-  if [[ -n "${old:-}" ]]; then
-    kill "$old" 2>/dev/null || true
-    sleep 1
-  fi
+  kill_api_soft
   start_api
 }
 
@@ -199,16 +268,15 @@ vercel_needs_sync() {
   return 1
 }
 
-sync_vercel_urls() {
-  local url wss
-  url="$(current_tunnel)"
-  wss="${url/https:/wss:}"
-  [[ -n "$url" ]] || return 1
+# Força redeploy do cloud mesmo se vercel.json local já tem a URL
+# (caso típico: keep rodou com --no-push e a Vercel ficou no túnel velho).
+FORCE_CLOUD_DEPLOY=0
+LAST_CLOUD_DEPLOY_AT=0
+CLOUD_DEPLOY_COOLDOWN="${KEEP_CLOUD_DEPLOY_COOLDOWN:-120}"
 
-  local changed=0
-  if [[ -f "$CLOUD/vercel.json" ]]; then
-    if ! grep -qF "$url" "$CLOUD/vercel.json"; then
-      python3 - "$CLOUD/vercel.json" "$url" <<'PY'
+write_home_api_url() {
+  local path="$1" url="$2"
+  python3 - "$path" "$url" <<'PY'
 import json, sys
 path, url = sys.argv[1], sys.argv[2]
 with open(path) as f:
@@ -218,13 +286,11 @@ with open(path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
-      changed=1
-      log "cloud/vercel.json → HOME_API_URL=$url"
-    fi
-  fi
-  if [[ -f "$FRONT/vercel.json" ]]; then
-    if ! grep -qF "$wss" "$FRONT/vercel.json"; then
-      python3 - "$FRONT/vercel.json" "$wss" <<'PY'
+}
+
+write_ws_origin() {
+  local path="$1" wss="$2"
+  python3 - "$path" "$wss" <<'PY'
 import json, sys
 path, wss = sys.argv[1], sys.argv[2]
 with open(path) as f:
@@ -234,56 +300,96 @@ with open(path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
+}
+
+deploy_vercel_repo() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  if ! command -v npx >/dev/null 2>&1; then
+    log "WARN: npx ausente — pulei deploy de $dir"
+    return 1
+  fi
+  log "Deploy Vercel prod: $dir"
+  (
+    cd "$dir"
+    npx --yes vercel@latest --prod --yes
+  ) >>"$WATCH_LOG" 2>&1 && log "Deploy ok: $dir" && return 0
+  log "WARN: deploy falhou em $dir (veja $WATCH_LOG)"
+  return 1
+}
+
+push_repo() {
+  local dir="$1" msg="$2"
+  [[ -d "$dir/.git" ]] || return 0
+  (
+    cd "$dir"
+    git add vercel.json
+    if git diff --cached --quiet; then
+      return 0
+    fi
+    git commit -m "$msg"
+    git push origin HEAD
+    log "Push ok: $dir"
+  ) || log "WARN: push falhou em $dir"
+}
+
+cloud_meta_home() {
+  curl -fsS --max-time 12 "$CLOUD_PUBLIC_URL/meta" 2>/dev/null \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin).get("homeApiUrl") or "")' 2>/dev/null || true
+}
+
+cloud_points_at_current_tunnel() {
+  local url live
+  url="$(current_tunnel)"
+  [[ -n "$url" ]] || return 1
+  live="$(cloud_meta_home)"
+  [[ -n "$live" && "$live" == "$url" ]]
+}
+
+sync_vercel_urls() {
+  local url wss force="${1:-0}"
+  url="$(current_tunnel)"
+  wss="${url/https:/wss:}"
+  [[ -n "$url" ]] || return 1
+
+  local changed=0
+  if [[ -f "$CLOUD/vercel.json" ]]; then
+    if ! grep -qF "$url" "$CLOUD/vercel.json"; then
+      write_home_api_url "$CLOUD/vercel.json" "$url"
+      changed=1
+      log "cloud/vercel.json → HOME_API_URL=$url"
+    fi
+  fi
+  if [[ -f "$FRONT/vercel.json" ]]; then
+    if ! grep -qF "$wss" "$FRONT/vercel.json"; then
+      write_ws_origin "$FRONT/vercel.json" "$wss"
       changed=1
       log "front/vercel.json → VITE_WS_ORIGIN=$wss"
     fi
   fi
 
-  if [[ "$changed" -eq 0 ]]; then
-    log "Vercel URLs já sincronizadas"
+  if [[ "$changed" -eq 0 && "$force" -eq 0 ]]; then
+    log "Vercel URLs já sincronizadas (arquivos locais)"
     return 0
   fi
 
-  if [[ "$DO_PUSH" -eq 0 ]]; then
-    log "URL atualizada localmente (--no-push); faça commit/push depois"
-    return 0
+  if [[ "$DO_PUSH" -eq 1 ]]; then
+    push_repo "$CLOUD" "Point HOME_API_URL at the current Cloudflare quick tunnel."
+    push_repo "$FRONT" "Point VITE_WS_ORIGIN at the current Cloudflare quick tunnel."
+  elif [[ "$changed" -eq 1 ]]; then
+    log "URL atualizada localmente (--no-push); deploy do cloud ainda pode rodar"
   fi
 
-  push_repo() {
-    local dir="$1" msg="$2"
-    [[ -d "$dir/.git" ]] || return 0
-    (
-      cd "$dir"
-      git add vercel.json
-      if git diff --cached --quiet; then
-        return 0
-      fi
-      git commit -m "$msg"
-      git push origin HEAD
-      log "Push ok: $dir"
-    ) || log "WARN: push falhou em $dir"
-  }
-
-  push_repo "$CLOUD" "Point HOME_API_URL at the current Cloudflare quick tunnel."
-  push_repo "$FRONT" "Point VITE_WS_ORIGIN at the current Cloudflare quick tunnel."
-
-  if [[ "$DO_DEPLOY" -eq 1 ]]; then
-    deploy_repo() {
-      local dir="$1"
-      [[ -d "$dir" ]] || return 0
-      if ! command -v npx >/dev/null 2>&1; then
-        log "WARN: npx ausente — pulei deploy de $dir"
-        return 0
-      fi
-      log "Deploy Vercel prod: $dir"
-      (
-        cd "$dir"
-        npx --yes vercel@latest --prod --yes
-      ) >>"$WATCH_LOG" 2>&1 && log "Deploy ok: $dir" || log "WARN: deploy falhou em $dir (veja $WATCH_LOG)"
-    }
-    deploy_repo "$CLOUD"
-    deploy_repo "$FRONT"
+  # Cloud SEMPRE precisa do HOME_API_URL no deploy — mesmo com --no-push.
+  # Sem isso o site público fica no túnel morto e o banner “API fora” aparece.
+  if [[ "$DO_DEPLOY" -eq 1 || "$force" -eq 1 ]]; then
+    deploy_vercel_repo "$CLOUD" || return 1
+    if [[ "$DO_DEPLOY" -eq 1 && "$changed" -eq 1 && "$DO_PUSH" -eq 1 ]]; then
+      deploy_vercel_repo "$FRONT" || true
+    fi
+    LAST_CLOUD_DEPLOY_AT="$(date +%s)"
   fi
+  return 0
 }
 
 sync_stripe_webhook() {
@@ -311,7 +417,10 @@ needs_full_sync() {
   local url last
   url="$(current_tunnel)"
   [[ -n "$url" ]] || return 0
-  last="$(tr -d '[:space:]' < "$SYNCED_FILE" 2>/dev/null || true)"
+  last=""
+  if [[ -f "$SYNCED_FILE" ]]; then
+    last="$(tr -d '[:space:]' <"$SYNCED_FILE" || true)"
+  fi
   if [[ "$url" != "$last" ]]; then
     return 0
   fi
@@ -322,18 +431,55 @@ needs_full_sync() {
 }
 
 sync_public_endpoints() {
-  local url
+  local url force="${1:-0}"
   url="$(current_tunnel)"
   [[ -n "$url" ]] || return 1
-  if ! needs_full_sync; then
+  if [[ "$force" -eq 0 ]] && ! needs_full_sync; then
     return 0
   fi
   mkdir -p "$ROOT/run"
-  log "Sincronizando endpoints públicos para $url"
-  sync_vercel_urls || true
+  log "Sincronizando endpoints públicos para $url${force:+ (force)}"
+  sync_vercel_urls "$force" || true
   sync_stripe_webhook || true
-  printf '%s' "$url" >"$SYNCED_FILE"
-  log "Sync marcado em $SYNCED_FILE"
+  # Só marca synced se o proxy público realmente alcança a API atual.
+  if cloud_proxy_ok && cloud_points_at_current_tunnel; then
+    printf '%s' "$url" >"$SYNCED_FILE"
+    log "Sync marcado em $SYNCED_FILE (cloud ok → $url)"
+  else
+    rm -f "$SYNCED_FILE"
+    log "WARN: sync incompleto — cloud ainda não aponta/alcança $url"
+    return 1
+  fi
+}
+
+heal_cloud_proxy() {
+  local now last
+  now="$(date +%s)"
+  last="${LAST_CLOUD_DEPLOY_AT:-0}"
+  if [[ $((now - last)) -lt "$CLOUD_DEPLOY_COOLDOWN" ]]; then
+    log "Cloud offline — aguardando cooldown de deploy (${CLOUD_DEPLOY_COOLDOWN}s)"
+    return 0
+  fi
+  local url live
+  url="$(current_tunnel)"
+  live="$(cloud_meta_home)"
+  log "Cloud offline — live=${live:-?} esperado=$url — forçando deploy"
+  # Garante arquivo local certo + deploy mesmo se já “sincronizado” no disco
+  if [[ -f "$CLOUD/vercel.json" ]]; then
+    write_home_api_url "$CLOUD/vercel.json" "$url"
+  fi
+  sync_stripe_webhook || true
+  if deploy_vercel_repo "$CLOUD"; then
+    LAST_CLOUD_DEPLOY_AT="$(date +%s)"
+    sleep 3
+    if cloud_proxy_ok && cloud_points_at_current_tunnel; then
+      printf '%s' "$url" >"$SYNCED_FILE"
+      log "Cloud recuperado → $url"
+      return 0
+    fi
+    log "WARN: deploy ok mas health/meta ainda falhou"
+  fi
+  return 1
 }
 
 CLOUD_PUBLIC_URL="${SPOTSTRAT_CLOUD_URL:-https://cloud-nine-gilt.vercel.app}"
@@ -346,7 +492,11 @@ bring_up() {
   ensure_postgres
   start_api
   ensure_tunnel
-  sync_public_endpoints
+  sync_public_endpoints || true
+  # Garante que a Vercel pública já fala com ESTE túnel (não só vercel.json local).
+  if ! cloud_proxy_ok || ! cloud_points_at_current_tunnel; then
+    heal_cloud_proxy || true
+  fi
   if [[ "$WITH_FRONT" -eq 1 ]]; then
     start_front
   fi
@@ -354,6 +504,11 @@ bring_up() {
   log "  API     http://127.0.0.1:7171/v1/health"
   log "  Túnel   $(current_tunnel)"
   log "  Cloud   $CLOUD_PUBLIC_URL/v1/health"
+  if cloud_proxy_ok; then
+    log "  Meta    $(cloud_meta_home)"
+  else
+    log "  WARN    cloud proxy ainda offline"
+  fi
   if [[ "$WITH_FRONT" -eq 1 ]]; then
     log "  Front   http://127.0.0.1:7172/"
   fi
@@ -362,30 +517,65 @@ bring_up() {
 bring_up
 
 if [[ "$WATCH" -eq 1 ]]; then
-  log "Watch ativo (intervalo ${INTERVAL}s). Ctrl+C para parar."
+  log "Watch ativo (intervalo ${INTERVAL}s, falhas→restart=${API_FAIL_LIMIT}). Ctrl+C para parar."
   log "Logs: API=$API_LOG keep=$WATCH_LOG"
+  TUNNEL_FAILS=0
   while true; do
     sleep "$INTERVAL"
     ensure_postgres || true
-    if ! api_ok; then
-      log "API fora — religando"
+
+    # Processo/porta mortos → religa na hora (não espera 2 health fails).
+    if ! api_pid_alive || ! api_listening; then
+      log "API processo/porta mortos — religando"
       restart_api || true
+      API_FAILS=0
+      TUNNEL_FAILS=0
+      continue
     fi
-    if ! tunnel_ok; then
-      log "Túnel fora — religando + sync Vercel/Stripe"
+
+    if api_ok; then
+      API_FAILS=0
+    else
+      API_FAILS=$((API_FAILS + 1))
+      log "API health falhou (${API_FAILS}/${API_FAIL_LIMIT})"
+      if [[ "$API_FAILS" -ge "$API_FAIL_LIMIT" ]]; then
+        log "API fora — religando"
+        restart_api || true
+        API_FAILS=0
+        TUNNEL_FAILS=0
+      fi
+      continue
+    fi
+
+    if ! tunnel_process_ok; then
+      log "cloudflared morto — religando túnel + sync"
       ensure_tunnel || true
-      # força re-sync mesmo se a URL coincidir com a antiga
       rm -f "$SYNCED_FILE"
       sync_public_endpoints || true
-    elif needs_full_sync; then
-      log "URL/config dessincronizada — sync Vercel/Stripe"
-      sync_public_endpoints || true
+      TUNNEL_FAILS=0
+    else
+      local_url="$(current_tunnel)"
+      if [[ -n "$local_url" ]] && curl -fsS --max-time 10 "$local_url/v1/health" >/dev/null 2>&1; then
+        TUNNEL_FAILS=0
+        if needs_full_sync; then
+          log "URL/config dessincronizada — sync Vercel/Stripe"
+          sync_public_endpoints || true
+        fi
+      else
+        TUNNEL_FAILS=$((TUNNEL_FAILS + 1))
+        log "Túnel health falhou (${TUNNEL_FAILS}/2)"
+        if [[ "$TUNNEL_FAILS" -ge 2 ]]; then
+          log "Túnel fora — religando + sync Vercel/Stripe"
+          ensure_tunnel || true
+          rm -f "$SYNCED_FILE"
+          sync_public_endpoints || true
+          TUNNEL_FAILS=0
+        fi
+      fi
     fi
-    # cloud proxy deve alcançar a API via HOME_API_URL
-    if ! cloud_proxy_ok; then
-      log "WARN: cloud proxy offline — forçando sync/deploy"
-      rm -f "$SYNCED_FILE"
-      sync_public_endpoints || true
+
+    if ! cloud_proxy_ok || ! cloud_points_at_current_tunnel; then
+      heal_cloud_proxy || true
     fi
   done
 fi

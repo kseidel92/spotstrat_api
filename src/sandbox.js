@@ -645,11 +645,39 @@ function tradesCoverageAsk(code, userText) {
   return 'O pedido descreve trades agressivos. Leia ctx.trades na janela que o texto deu e aplique essa comparação. Não troque stop, alvo nem o gatilho.';
 }
 
+function hasVolumeAverage(code) {
+  const src = String(code || '');
+  if (/ctx\.sma\s*\(\s*[\w.]*(?:volume|vol)\b/i.test(src)) return true;
+  if (/ctx\.sma\s*\([^)]*\.volume/i.test(src)) return true;
+  // Média manual: soma .volume / N (ou reduce) nas últimas N velas.
+  if (/\.volume\b/.test(src) && (/\bsum\b|\breduce\b|\/\s*\d+/.test(src))) return true;
+  return false;
+}
+
 function averagesCoverageAsk(code, userText) {
   const prose = ruleProse(userText);
   if (!describesAverages(prose)) return '';
-  if (/ctx\.(sma|ema|vwap|rsi)\s*\(/.test(String(code || ''))) return '';
+  const src = String(code || '');
+  const volumeAvg = /volume.{0,80}m[eé]dia|m[eé]dia.{0,40}volume|m[eé]dia de volume/i.test(prose);
+  if (volumeAvg) {
+    if (hasVolumeAverage(src) || /ctx\.(sma|ema)\s*\(/.test(src)) return '';
+    const bars = String(userText || '').match(/(?:pelo menos|faixa de|(?:[uú]ltimas?))\s+(\d+)\s+(?:candles?|velas?)/i);
+    const n = bars ? bars[1] : '20';
+    return `O pedido pede média de volume. Use ctx.sma(candles.volume, ${n}) (ou a média das ${n} velas do timeframe do sinal). Não troque stop, alvo nem o gatilho.`;
+  }
+  if (/ctx\.(sma|ema|vwap|rsi)\s*\(/.test(src)) return '';
   return 'O pedido cita média, VWAP ou RSI. Use ctx.sma, ctx.ema, ctx.vwap ou ctx.rsi com os períodos escritos. Não troque stop, alvo nem o gatilho.';
+}
+
+/** Desk already filters by mare_mode — JS must not reinvent market-breadth mare. */
+function mareReinventionAsk(code, options) {
+  if (!options || !['good', 'not_bad'].includes(options.mareMode)) return '';
+  const src = String(code || '');
+  const invents = /pct24\s*[><=!]|tideOk|mareOk|humorOk|mar[eé]Ok|mar[eé]\s*boa|EMA\(50\).*1h|ema50.*mar/i.test(src)
+    || (/pct24/.test(src) && /(?:mar[eé]|tide|humor)/i.test(src))
+    || (/\bema\s*\([^)]*50/.test(src) && /(?:mar[eé]|tide|humor)/i.test(src + String(options._thesis || '')));
+  if (!invents) return '';
+  return 'O filtro de maré já está no desk (mare_mode). Remova do código qualquer checagem de maré, pct24 ou EMA usada como maré/tide/humor. Mantenha o resto da regra intacta.';
 }
 
 function reversalAsk(code, userText) {
@@ -835,6 +863,8 @@ function buildJsRecipe(data, userText, locale, options) {
   if (trades) return { ask: trades, retry: true };
   const averages = averagesCoverageAsk(code, userText);
   if (averages) return { ask: averages, retry: true };
+  const mareDup = mareReinventionAsk(code, options);
+  if (mareDup) return { ask: mareDup, retry: true };
   const reversal = reversalAsk(code, userText);
   if (reversal) return { ask: reversal, retry: true };
   const persistAgg = persistAggressionAsk(code, userText);
@@ -867,14 +897,29 @@ function buildJsRecipe(data, userText, locale, options) {
   }
   const ran = validateCode(code);
   if (!ran.ok) return { ask: `O código quebrou na validação: ${ran.error}`, retry: true };
+  const userStop = namedExitPct(userText, 'stop');
+  const userTarget = namedExitPct(userText, 'target');
+  const scrubClaim = (s) => {
+    let out = String(s || '')
+      .replace(/como você escolheu/gi, 'pelo padrão do produto / busca no histórico')
+      .replace(/como vc escolheu/gi, 'pelo padrão do produto / busca no histórico');
+    // If the person did not write stop/target %, never claim they chose those numbers.
+    if (userStop == null) {
+      out = out.replace(/stop[^.]*como pedido/gi, (chunk) => chunk.replace(/como pedido/gi, 'pelo padrão do produto'));
+    }
+    if (userTarget == null) {
+      out = out.replace(/(?:alvo|target)[^.]*como pedido/gi, (chunk) => chunk.replace(/como pedido/gi, 'pelo padrão do produto'));
+    }
+    return out;
+  };
   const text = {
-    thesis: String(data.thesis || 'Regra escrita pela IA e validada nos candles.'),
-    entry: String(data.entryText || ''),
-    exit: String(data.exitText || ''),
+    thesis: scrubClaim(data.thesis || 'Regra escrita pela IA e validada nos candles.'),
+    entry: scrubClaim(data.entryText || ''),
+    exit: scrubClaim(data.exitText || ''),
     filters: defaults.length
       ? `Completei: ${defaults.map((item) => `${item.label} ${item.value}`).join('; ')}. Dá para ajustar na conversa.`
       : 'A regra está no código da estratégia.',
-    risks: `${String(data.risks || '')} Paper. O código rodou em candles de teste sem quebrar.`.trim(),
+    risks: `${scrubClaim(data.risks || '')} Paper. O código rodou em candles de teste sem quebrar.`.trim(),
     paramsPlain: 'strategy(ctx)',
   };
   const name = String(data.name || 'Estratégia').slice(0, 80);

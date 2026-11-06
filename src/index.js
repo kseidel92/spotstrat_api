@@ -53,8 +53,7 @@ async function main() {
     if (token) {
       try { payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET); } catch (_) { payload = null; }
     }
-    // TRAVA DE AUTENTICAÇÃO COMENTADA — o websocket abre sem sessão.
-    // if (!payload) { ws.close(4001, 'auth'); return; }
+    // Sem token: cai no guest (desk paper do dono). Auth opcional no WS.
     const userId = payload?.sub || guestId;
     if (!userId) {
       ws.close(4001, 'auth');
@@ -84,7 +83,7 @@ async function main() {
 
   const port = Number(process.env.PORT || 7171);
   server.on('error', (err) => {
-    console.error(err);
+    console.error('[api] listen', err);
     process.exit(1);
   });
   await new Promise((resolve) => server.listen(port, '0.0.0.0', resolve));
@@ -93,16 +92,37 @@ async function main() {
   desk.start();
   console.log(`[api] http://127.0.0.1:${port}`);
 
-  const shutdown = async () => {
-    console.log('[api] encerrando');
-    server.close();
-    hub.stop();
-    await desk.stop();
-    await pool.end();
+  // Express 4 + async throw vira unhandledRejection (Node 20: throw → mata o processo).
+  // Mantém a API de pé; o erro já vai pro logger / handler HTTP quando possível.
+  process.on('unhandledRejection', (reason) => {
+    console.error('[unhandledRejection]', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[uncaughtException]', err);
+  });
+
+  let shuttingDown = false;
+  const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[api] encerrando (${signal || 'signal'})`);
+    try { worker.stop(); } catch (_) { /* ignore */ }
+    try { hub.stop(); } catch (_) { /* ignore */ }
+    await new Promise((resolve) => {
+      server.close(() => resolve());
+      setTimeout(resolve, 2000);
+    });
+    try {
+      await Promise.race([
+        desk.stop(),
+        new Promise((resolve) => setTimeout(resolve, 4000)),
+      ]);
+    } catch (_) { /* ignore */ }
+    try { await pool.end(); } catch (_) { /* already closed */ }
     process.exit(0);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => { shutdown('SIGINT'); });
+  process.on('SIGTERM', () => { shutdown('SIGTERM'); });
 }
 
 main().catch((err) => {

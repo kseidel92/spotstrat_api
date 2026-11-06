@@ -4,7 +4,9 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 12,
   idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 10_000,
+  connectionTimeoutMillis: 8_000,
+  // Evita idle-in-transaction eterno (worker/desk) segurando conexão e travando cadastro.
+  options: '-c statement_timeout=15000 -c idle_in_transaction_session_timeout=10000',
 });
 
 // Sem isso, "terminating connection due to administrator command" (57P01)
@@ -309,6 +311,7 @@ CREATE TABLE IF NOT EXISTS prompts (
 );
 CREATE INDEX IF NOT EXISTS prompts_user_idx ON prompts (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS prompts_created_idx ON prompts (created_at DESC);
+CREATE INDEX IF NOT EXISTS prompts_created_id_idx ON prompts (created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS prompts_status_idx ON prompts (status, created_at DESC);
 ALTER TABLE prompts ADD COLUMN IF NOT EXISTS http_status int;
 ALTER TABLE prompts ADD COLUMN IF NOT EXISTS error_stage text;

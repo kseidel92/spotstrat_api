@@ -111,10 +111,13 @@ function mountAdmin(app) {
   });
 
   app.get('/v1/admin/prompts', async (req, res) => {
-    const limit = clampInt(req.query.limit, 50, 1, 200);
-    const offset = clampInt(req.query.offset, 0, 0, 100000);
+    const limit = clampInt(req.query.limit, 50, 1, 100);
+    const page = clampInt(req.query.page, 1, 1, 1_000_000);
+    const offset = req.query.offset != null
+      ? clampInt(req.query.offset, 0, 0, 50_000_000)
+      : (page - 1) * limit;
     const status = String(req.query.status || '').trim();
-    const q = String(req.query.q || '').trim();
+    const q = String(req.query.q || '').trim().slice(0, 200);
     const onlyBad = req.query.bad === '1' || req.query.bad === 'true';
     const params = [];
     const where = [];
@@ -122,33 +125,45 @@ function mountAdmin(app) {
       params.push(status);
       where.push(`p.status = $${params.length}`);
     } else if (onlyBad) {
-      where.push(`p.status IN ('failed','rejected') OR coalesce(p.http_status, 200) >= 400 OR p.error_raw IS NOT NULL`);
+      where.push(`(p.status IN ('failed','rejected') OR coalesce(p.http_status, 200) >= 400 OR p.error_raw IS NOT NULL)`);
     }
     if (q) {
       params.push(`%${q}%`);
       where.push(`(p.prompt ILIKE $${params.length} OR p.user_email ILIKE $${params.length} OR coalesce(p.detail,'') ILIKE $${params.length} OR coalesce(p.error_raw,'') ILIKE $${params.length})`);
     }
     const filter = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const countParams = [...params];
     params.push(limit, offset);
-    const { rows } = await pool.query(
-      `SELECT p.id, p.user_id, p.user_email, p.job_id, p.thread_id, p.prompt, p.mode, p.status,
-              p.created_strategy, p.strategy_id, p.strategy_name, p.detail,
-              p.http_status, p.error_stage, p.error_raw, p.provider, p.duration_ms,
-              p.created_at, p.finished_at,
-              j.status AS job_status, j.error AS job_error, j.kind AS job_kind
-       FROM prompts p
-       LEFT JOIN jobs j ON j.id = p.job_id
-       ${filter}
-       ORDER BY p.created_at DESC
-       LIMIT $${params.length - 1} OFFSET $${params.length}`,
-      params,
-    );
-    const countParams = params.slice(0, -2);
-    const { rows: totalRows } = await pool.query(
-      `SELECT count(*)::int AS n FROM prompts p ${filter}`,
-      countParams,
-    );
-    res.json({ prompts: rows, total: totalRows[0]?.n || 0, limit, offset });
+    const [{ rows }, { rows: totalRows }] = await Promise.all([
+      pool.query(
+        `SELECT p.id, p.user_id, p.user_email, p.job_id, p.thread_id, p.prompt, p.mode, p.status,
+                p.created_strategy, p.strategy_id, p.strategy_name, p.detail,
+                p.http_status, p.error_stage, p.error_raw, p.provider, p.duration_ms,
+                p.created_at, p.finished_at,
+                j.status AS job_status, j.error AS job_error, j.kind AS job_kind
+         FROM prompts p
+         LEFT JOIN jobs j ON j.id = p.job_id
+         ${filter}
+         ORDER BY p.created_at DESC, p.id DESC
+         LIMIT $${params.length - 1} OFFSET $${params.length}`,
+        params,
+      ),
+      pool.query(
+        `SELECT count(*)::bigint AS n FROM prompts p ${filter}`,
+        countParams,
+      ),
+    ]);
+    const total = Number(totalRows[0]?.n || 0);
+    const pages = Math.max(1, Math.ceil(total / limit) || 1);
+    res.json({
+      prompts: rows,
+      total,
+      limit,
+      offset,
+      page: Math.floor(offset / limit) + 1,
+      pages,
+      hasMore: offset + rows.length < total,
+    });
   });
 
   app.get('/v1/admin/prompts/:id', async (req, res) => {

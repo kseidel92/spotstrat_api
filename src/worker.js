@@ -324,9 +324,22 @@ async function applyHistoryFit(job, result, messages) {
   if (again.recipe) {
     const loc = (job.input || {}).locale || 'pt-BR';
     const block = (again.recipe.explanation && (again.recipe.explanation[loc] || again.recipe.explanation.en)) || {};
-    block.exit = `${block.exit || ''} ${shown}`.trim();
-    block.risks = `${block.risks || ''} O arquivo de 18 meses é só de velas.`.trim();
+    const scrub = (s) => String(s || '')
+      .replace(/como você escolheu/gi, 'pela busca nas velas de 18 meses')
+      .replace(/como vc escolheu/gi, 'pela busca nas velas de 18 meses');
+    block.exit = `${scrub(block.exit)} ${shown}`.trim();
+    block.thesis = scrub(block.thesis);
+    block.risks = `${scrub(block.risks)} O arquivo de 18 meses é só de velas.`.trim();
     again.recipe.explanation = { ...(again.recipe.explanation || {}), [loc]: block, en: { ...block } };
+  }
+  // Never bubble internal model-retry asks to needs_user from history rewrite.
+  if (again.ask && !again.recipe) {
+    const { isInternalAsk } = require('./llm');
+    if (isInternalAsk(again.ask)) return result.recipe ? result : {
+      ask: 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela.',
+      questions: ['Quando a estratégia deve comprar?'],
+      suggestions: ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'],
+    };
   }
   return again.recipe || again.ask ? again : result;
 }
@@ -373,8 +386,14 @@ async function runJob(job) {
   });
   result = await applyHistoryFit(job, result, messages);
   if (result.ask || (result.questions && result.questions.length)) {
-    const questions = (result.questions && result.questions.length) ? result.questions : [result.ask];
-    const ask = questions[0];
+    const { isInternalAsk } = require('./llm');
+    let questions = (result.questions && result.questions.length) ? result.questions : [result.ask];
+    let ask = questions[0];
+    // Safety net: never surface model-retry / eng prompts as needs_user.
+    if (isInternalAsk(ask)) {
+      ask = 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela (ex.: sobe 1% em 3 minutos). Se quiser, diga também o stop e o alvo em %.';
+      questions = [ask];
+    }
     const suggestions = Array.isArray(result.suggestions) && result.suggestions.length
       ? result.suggestions
       : ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'];
@@ -388,7 +407,11 @@ async function runJob(job) {
   }
   const shaped = await shapeRecipe(job, result.recipe);
   if (shaped.ask) {
-    const ask = shaped.ask;
+    const { isInternalAsk } = require('./llm');
+    let ask = shaped.ask;
+    if (isInternalAsk(ask)) {
+      ask = 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela.';
+    }
     const suggestions = ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'];
     await say(job.thread_id, ask, null);
     await finish(job, {
