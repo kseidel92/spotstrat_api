@@ -904,20 +904,16 @@ function buildJsRecipe(data, userText, locale, options) {
     // Only rewrite attribution when the person did NOT write stop/target %.
     if (userStop == null && userTarget == null) {
       out = out
-        .replace(/como você escolheu/gi, 'pela busca nas velas / padrão do produto')
-        .replace(/como vc escolheu/gi, 'pela busca nas velas / padrão do produto')
-        .replace(/conforme o pedido/gi, 'pela busca nas velas / padrão do produto')
-        .replace(/conforme pedido/gi, 'pela busca nas velas / padrão do produto')
-        .replace(/como pedido/gi, 'pela busca nas velas / padrão do produto')
-        .replace(/como você pediu/gi, 'pela busca nas velas / padrão do produto')
-        .replace(/como vc pediu/gi, 'pela busca nas velas / padrão do produto');
-      out = out.replace(/\b(?:stop|alvo|target)[^.!?\n]{0,80}\b(?:pediu|escolheu|definiu|escreveu)\b/gi, (chunk) => (
-        chunk
-          .replace(/\bpediu\b/gi, 'veio da busca/padrão')
-          .replace(/\bescolheu\b/gi, 'veio da busca/padrão')
-          .replace(/\bdefiniu\b/gi, 'veio da busca/padrão')
-          .replace(/\bescreveu\b/gi, 'veio da busca/padrão')
-      ));
+        .replace(/como você escolheu/gi, 'pela busca nas velas')
+        .replace(/como vc escolheu/gi, 'pela busca nas velas')
+        .replace(/conforme o pedido/gi, 'pela busca nas velas')
+        .replace(/conforme pedido/gi, 'pela busca nas velas')
+        .replace(/como pedido/gi, 'pela busca nas velas')
+        .replace(/como você pediu/gi, 'pela busca nas velas')
+        .replace(/como vc pediu/gi, 'pela busca nas velas')
+        .replace(/foram os que a pessoa (?:pediu|escolheu|definiu|escreveu)/gi, 'vieram da busca nas velas')
+        .replace(/que a pessoa (?:pediu|escolheu|definiu|escreveu)/gi, 'da busca nas velas')
+        .replace(/a pessoa (?:pediu|escolheu|definiu|escreveu)/gi, 'a busca nas velas deu');
     }
     return out;
   };
