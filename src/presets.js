@@ -17,9 +17,9 @@ const PRESETS = [
   {
     presetKey: 'oscila-toques',
     type: 'oscila',
-    name: 'Oscilação · 3 toques',
+    name: 'Compra no fundo da caixa',
     mareMode: 'any',
-    description: 'Caixa de 4h com 2 pisos e 1 teto. Compra o próximo fundo. OCO 1,6% / 2,2% / 40 min. Livro OBI ≥ 62% por 1,2s.',
+    description: 'Espera a moeda formar uma caixa e compra perto do fundo, com stop e alvo definidos. Boa para quem está começando.',
     explanation: {
       'pt-BR': {
         thesis: 'A caixa de 4 horas já foi tocada duas vezes no piso e uma no teto. A compra é o próximo fundo dessa caixa, não uma perseguição.',
@@ -63,9 +63,9 @@ const PRESETS = [
   {
     presetKey: 'lid-largo-cauda',
     type: 'rs_lead',
-    name: 'Liderança largo (cauda)',
+    name: 'Compra quem está liderando',
     mareMode: 'any',
-    description: 'Top força 24h contra o BTC. Stop 1,4×ATR de 5 minutos, alvo 2,8R, 90 minutos. Sem teto de pump. Livro confirma.',
+    description: 'Compra as moedas que sobem mais que o Bitcoin no dia, com stop largo o bastante para o movimento.',
     explanation: {
       'pt-BR': {
         thesis: 'Compra quem está liderando o dia contra o BTC, com stop largo o bastante para a cauda (o movimento que o stop curto devolvia).',
@@ -100,7 +100,7 @@ const PRESETS = [
   {
     presetKey: 'queda-livro',
     type: 'dump_rebound',
-    name: 'Queda + livro',
+    name: 'Rebote depois da queda'
     mareMode: 'any',
     description: 'Queda de 10% em 30 minutos entra numa lista de 1 hora. O rebote compra com livro, tape e uma vela verde.',
     explanation: {
@@ -142,7 +142,7 @@ const PRESETS = [
   {
     presetKey: 'mare-fundo-livro',
     type: 'mare_fundo',
-    name: 'Fundo da maré · livro',
+    name: 'Compra na recuperação do mercado'
     mareMode: 'good',
     description: 'Com a maré boa, compra a alt mais caída em 7 dias, desde que o livro confirme.',
     explanation: {
@@ -177,7 +177,7 @@ const PRESETS = [
   {
     presetKey: 'anomalia-livro',
     type: 'anomalia',
-    name: 'Anomalia curta',
+    name: 'Pulo rápido de preço'
     mareMode: 'any',
     description: 'Spike de 15 minutos entre 3% e 10%, volume em dobro, à frente do BTC, com livro e tape mornos.',
     explanation: {
@@ -218,7 +218,7 @@ const PRESETS = [
   {
     presetKey: 'oscila-largo',
     type: 'oscila',
-    name: 'Oscilação · stop largo',
+    name: 'Sobe e desce com stop largo'
     mareMode: 'any',
     description: 'Serra de 120 minutos, faixa de pelo menos 8%. Stop 4%, alvo 6%, 12 horas. Não é a caixa de 3 toques.',
     explanation: {

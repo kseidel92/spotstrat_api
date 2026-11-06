@@ -393,7 +393,7 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
   const extra = [
     current ? `Receita atual (mude só o que o usuário pediu): ${JSON.stringify(current)}` : '',
     labContext ? `Histórico antigo de preço, só vela. O ao vivo tem ctx.trades e ctx.book: ${labContext}` : '',
-    'Escreva function strategy(ctx) com os números do pedido. Use ctx.trades e ctx.book só quando Entrada, Lista ou Saída descreverem fluxo, tape, aggTrades ou livro. A linha Fontes sozinha não obriga filtro. Agressão por N segundos exige persistência em ctx.memory, não um único snapshot. Candle de reversão bullish exige pavio inferior >= corpo e pavio superior < corpo. Se faltar um número necessário, não invente: deixe code vazio, deixe defaults vazio e faça uma pergunta.',
+    'Escreva function strategy(ctx) com os números do pedido. Use ctx.trades e ctx.book só quando Entrada, Lista ou Saída descreverem fluxo, tape, aggTrades ou livro. A linha Fontes sozinha não obriga filtro. Agressão por N segundos exige persistência em ctx.memory, não um único snapshot. Candle de reversão bullish exige pavio inferior >= corpo e pavio superior < corpo. Se faltar um número, COMPLETE com o padrão do produto (stop 0,8%, alvo 1,2%, lookback 20, etc.), declare no thesis e liste em defaults. Só pergunte se o gatilho for incompreensível.',
     optionNote(options),
     exitHint || '',
     mode === 'alarm' ? ALARM_NOTE : '',
@@ -450,7 +450,7 @@ function labSystemPrompt(locale, labContext) {
   return [
     `Você é o assistente do Laboratório SpotStrat: conversa sobre ideias de estratégia spot LONG (paper), Binance, simulador ao vivo.`,
     `Responda em ${lang}, tom claro e direto (pode usar títulos curtos e listas).`,
-    'Não crie código function strategy(ctx) aqui. Se pedirem para rodar no simulador, oriente a usar a aba Estratégias → Montar em passos.',
+    'Não crie código function strategy(ctx) aqui. Se pedirem para rodar no simulador, oriente a usar a aba Estratégias e descrever o gatilho em uma frase.',
     'Não invente números de backtest que não estejam no contexto. Diferencie o arquivo de 18 meses (só vela 1m) do ao vivo (livro e tape).',
     'Para pedidos de prós/contras e aprimoramento: seja específico (falsos rompimentos, taxa, halt diário, maré, liquidez, multi-timeframe).',
     labContext ? `Contexto do laboratório:\n${labContext}` : '',

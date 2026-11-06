@@ -372,8 +372,15 @@ async function runJob(job) {
   if (result.ask || (result.questions && result.questions.length)) {
     const questions = (result.questions && result.questions.length) ? result.questions : [result.ask];
     const ask = questions[0];
+    const suggestions = Array.isArray(result.suggestions) && result.suggestions.length
+      ? result.suggestions
+      : ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'];
     await say(job.thread_id, ask, null);
-    await finish(job, { status: 'needs_user', output: { ask, questions, provider: result.provider }, detail: ask });
+    await finish(job, {
+      status: 'needs_user',
+      output: { ask, questions: questions.slice(0, 1), suggestions, provider: result.provider },
+      detail: ask,
+    });
     return;
   }
   const shaped = await shapeRecipe(job, result.recipe);
@@ -403,7 +410,13 @@ async function runJob(job) {
   }
   await finish(job, {
     status: 'done',
-    output: { provider: result.provider, name: recipe.name, variants: list.length, defaults: recipe.defaults || [] },
+    output: {
+      provider: result.provider,
+      name: recipe.name,
+      variants: list.length,
+      defaults: recipe.defaults || [],
+      assumptions: recipe.assumptions || recipe.defaults || [],
+    },
     strategyId: strategyIds[0] || null,
     strategyIds,
     strategyName: recipe.name,
@@ -489,12 +502,26 @@ async function loop() {
   }
 }
 
+let timer = null;
+let stopped = false;
+
 function start(deskApi) {
+  stopped = false;
   attach(deskApi);
-  setInterval(() => {
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => {
+    if (stopped) return;
     loop().catch((err) => console.error('[worker] loop', err));
   }, 400);
   console.log('[worker] fila de prompts ligada');
 }
 
-module.exports = { start };
+function stop() {
+  stopped = true;
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+}
+
+module.exports = { start, stop };

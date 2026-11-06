@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { pool } = require('./db');
@@ -223,9 +224,17 @@ function createHttp(desk) {
   app.use(cookieParser());
   mountAdmin(app);
 
-  app.get('/v1/health', async (_req, res) => {
-    await pool.query('SELECT 1');
+  // Liveness leve (sem DB) — o keep-online usa isso; não pode bloquear no event loop.
+  app.get('/v1/health', (_req, res) => {
     res.json({ ok: true, service: 'tradeai' });
+  });
+  app.get('/v1/ready', async (_req, res) => {
+    try {
+      await pool.query('SELECT 1');
+      res.json({ ok: true, service: 'tradeai', db: true });
+    } catch (err) {
+      res.status(503).json({ ok: false, service: 'tradeai', db: false, message: err.message });
+    }
   });
 
   app.get('/v1/presets', (req, res) => {
@@ -257,27 +266,43 @@ function createHttp(desk) {
       );
       await seedPresets(client, inserted.rows[0].id);
       await client.query('COMMIT');
-      const user = inserted.rows[0];
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch (_) { /* already closed */ }
+      if (err.code === '23505' && /email/.test(err.detail || '')) return res.status(409).json({ error: 'email_taken', message: 'Este e-mail já tem conta.' });
+      if (err.code === '23505') return res.status(409).json({ error: 'phone_taken', message: 'Este celular já está em uso.' });
+      console.error('[auth/register]', err);
+      return res.status(500).json({ error: 'server', message: 'Não deu para criar a conta. Tente de novo.' });
+    } finally {
+      client.release();
+    }
+    const user = (await pool.query('SELECT * FROM users WHERE email = $1', [email])).rows[0];
+    try {
       const emailCode = await issueCode(user.id, 'email');
       const phoneCode = phone ? await issueCode(user.id, 'sms') : null;
-      const mail = await sendVerifyCode({ to: user.email, name: user.name, code: emailCode, locale: user.locale });
-      await desk.reloadUser(user.id);
+      // Não deixa Resend lento estourar o proxy (8–25s): responde e o e-mail segue em background.
+      const mail = await Promise.race([
+        sendVerifyCode({ to: user.email, name: user.name, code: emailCode, locale: user.locale }),
+        new Promise((resolve) => setTimeout(() => resolve({ sent: false, pending: true }), 4000)),
+      ]);
+      if (mail.pending) {
+        sendVerifyCode({ to: user.email, name: user.name, code: emailCode, locale: user.locale }).catch(() => {});
+      }
+      desk.reloadUser(user.id).catch(() => {});
       return res.status(201).json({
         user: publicUser(user),
         verification: {
           emailCode: mail.sent ? undefined : expose(emailCode),
-          sent: mail.sent,
+          sent: !!mail.sent,
           ...(phoneCode ? { phoneCode: expose(phoneCode) } : {}),
           expiresInSec: 600,
         },
       });
     } catch (err) {
-      await client.query('ROLLBACK');
-      if (err.code === '23505' && /email/.test(err.detail || '')) return res.status(409).json({ error: 'email_taken', message: 'Este e-mail já tem conta.' });
-      if (err.code === '23505') return res.status(409).json({ error: 'phone_taken', message: 'Este celular já está em uso.' });
-      throw err;
-    } finally {
-      client.release();
+      console.error('[auth/register] pós-criação', err);
+      return res.status(500).json({
+        error: 'server',
+        message: 'Conta criada, mas o código de verificação falhou. Entre e peça reenvio.',
+      });
     }
   });
 
@@ -1171,6 +1196,7 @@ function cleanOptions(raw) {
     channels: cleanChannels(raw.channels || {}),
     wallet: raw.wallet == null || raw.wallet === '' ? 1000 : walletOf(raw.wallet),
     guided: !!raw.guided,
+    autoFill: raw.autoFill !== false,
   };
 }
 

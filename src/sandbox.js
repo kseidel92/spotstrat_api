@@ -742,10 +742,35 @@ function partialExitDefaultAsk(question, userText) {
   return '';
 }
 
+function isNumericGapQuestion(question) {
+  return /\b(stop|alvo|target|tp|per[ií]odo|janela|lookback|m[eé]dia|velas?|candles?|minutos?|porcentagem|%|volatilidade|limite|toler[aâ]ncia|dist[aâ]ncia|hold|tempo)\b/i.test(String(question || ''));
+}
+
+function autoFillRetryAsk(question, userText) {
+  const partial = partialExitDefaultAsk(question || 'stop', userText);
+  if (partial) return `${partial} Escreva o código agora.`;
+  if (/m[eé]dia de volume|per[ií]odo.*volume|volume.*m[eé]dia|quantas velas.*volume/i.test(question) || /volume.{0,80}m[eé]dia|m[eé]dia.{0,40}volume/i.test(userText)) {
+    const bars = String(userText || '').match(/(?:pelo menos|faixa de|(?:[uú]ltimas?))\s+(\d+)\s+(?:candles?|velas?)/i);
+    const n = bars ? bars[1] : '20';
+    return `Não pergunte. Use exatamente ${n} velas na média de volume. Declare no thesis. Escreva o código.`;
+  }
+  if (/(?:m[ií]nima|m[aá]xima) local|quantas velas|lookback/i.test(question) || /(?:m[ií]nima|m[aá]xima) local/i.test(userText)) {
+    return 'Não pergunte. Use 20 velas do timeframe do sinal para mínima/máxima local. Declare no thesis. Escreva o código.';
+  }
+  if (/volatilidade|atr|limite/i.test(question) || /volatilidade|contra[cç][aã]o/i.test(userText)) {
+    return 'Não pergunte. Use ATR(14) abaixo da média do ATR das 20 velas anteriores no timeframe do sinal. Declare no thesis. Escreva o código.';
+  }
+  if (/\b(?:stop|alvo|target)\b/i.test(question) || /\b(?:stop|alvo|target)\b/i.test(userText)) {
+    return `Use stop ${DEFAULT_STOP_PCT}% e alvo ${DEFAULT_TARGET_PCT}% quando faltar porcentagem. Declare no thesis. Escreva o código.`;
+  }
+  return `Complete com os padrões do produto (stop ${DEFAULT_STOP_PCT}%, alvo ${DEFAULT_TARGET_PCT}%, lookback 20). Declare no thesis o que assumiu. Escreva function strategy(ctx) agora. Não pergunte de novo.`;
+}
+
 function buildJsRecipe(data, userText, locale, options) {
   const ask = String(data.ask || '').trim();
   const questions = questionsOf(data);
   const defaults = defaultsOf(data.defaults);
+  const autoFill = !options || options.autoFill !== false;
   const code = String(data.code || '').replace(/^```(?:javascript|js)?\s*/i, '').replace(/```$/, '').trim();
   const refusal = /não consigo|ctx só traz|aggTrade|order book|laborat[oó]rio|expor no ctx|não vou inventar/i;
   if (!code && refusal.test(`${ask} ${questions.join(' ')}`)) {
@@ -775,11 +800,26 @@ function buildJsRecipe(data, userText, locale, options) {
     if (/limite.*volatilidade|volatilidade.*limite|valor limite/i.test(question) && /volatilidade|contra[cç][aã]o/i.test(userText)) {
       return { ask: 'Não pergunte o limite absoluto. Use ATR(14) abaixo da média do ATR das 20 velas anteriores no timeframe do sinal (5m se o texto citar 5m). Declare no thesis. Escreva o código.', retry: true };
     }
-    return { ask: question || 'Não fechou o código da estratégia.', questions, retry: !questions.length };
+    if (autoFill && (isNumericGapQuestion(question) || !question)) {
+      return { ask: autoFillRetryAsk(question, userText), retry: true };
+    }
+    const suggestions = autoFill
+      ? ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Janela de 15 minutos']
+      : [];
+    return {
+      ask: question || 'Não fechei a estratégia. Descreva o gatilho em uma frase simples.',
+      questions: question ? [question] : ['Quando a estratégia deve comprar?'],
+      suggestions,
+      retry: !questions.length,
+    };
   }
-  if (defaults.length) {
+  if (defaults.length && !autoFill) {
     const missing = missingNumberAsk(defaults[0].label, locale);
     return { ask: missing, questions: [missing], retry: false };
+  }
+  if (defaults.length && autoFill && !code) {
+    const filled = defaults.map((item) => `${item.label} ${item.value}`).join('; ');
+    return { ask: `Use estes padrões e escreva o código: ${filled}. Declare no thesis.`, retry: true };
   }
   const numbers = checkNumbers(code, userText, defaults, locale);
   if (!numbers.ok) return { ask: numbers.error, retry: true };
@@ -834,6 +874,19 @@ function buildJsRecipe(data, userText, locale, options) {
     paramsPlain: 'strategy(ctx)',
   };
   const name = String(data.name || 'Estratégia').slice(0, 80);
+  const assumptions = defaults.length
+    ? defaults.map((item) => ({ label: item.label, value: String(item.value) }))
+    : [];
+  if (autoFill && !assumptions.length) {
+    const stop = namedExitPct(userText, 'stop');
+    const target = namedExitPct(userText, 'target');
+    if (stop == null && /\bstop\b/i.test(exitSection(userText) + ' ' + String(data.exitText || ''))) {
+      assumptions.push({ label: 'stop', value: `${DEFAULT_STOP_PCT}%` });
+    }
+    if (target == null && /\b(?:alvo|target)\b/i.test(exitSection(userText) + ' ' + String(data.exitText || ''))) {
+      assumptions.push({ label: 'alvo', value: `${DEFAULT_TARGET_PCT}%` });
+    }
+  }
   const recipe = {
     name,
     explanation: { [locale || 'pt-BR']: text, en: text },
@@ -843,6 +896,7 @@ function buildJsRecipe(data, userText, locale, options) {
     pacing: { noRepeatMin: 15, stopCooldownMin: 30 },
     plan: { kind: 'js', exact: true },
     defaults,
+    assumptions,
     code,
   };
   const check = validateRecipe(recipe);
