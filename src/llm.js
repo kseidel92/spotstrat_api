@@ -146,6 +146,7 @@ function triggerAlreadyKnown(messages, options) {
   if (/\bBrief\./i.test(blob) && blob.length > 80) return true;
   if (/scratchPromptLead|Crie uma estratégia de compra|Create a spot buy strategy/i.test(blob) && blob.length > 80) return true;
   if (blob.length > 160 && /(?:compra|compro|buy|entrada|gatilho|engolf|ema|romp)/i.test(blob)) return true;
+  if (blob.length > 48 && /(?:rompimento|rsi|macd|bollinger|donchian|compra|subir|stop|alvo|vwap|15m|5m|1h)/i.test(blob)) return true;
   return false;
 }
 
@@ -506,7 +507,8 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
   }
   let settled = settle(data, { messages, locale, current, mode, options });
   if (settled.failed) return { ...settled, provider };
-  for (let fix = 0; fix < 4 && settled.retry; fix++) {
+  const retryCap = (options && options.guided) ? 6 : 4;
+  for (let fix = 0; fix < retryCap && settled.retry; fix++) {
     try {
       const note = `${extra}\n${settled.ask}`;
       const again = provider === 'openai'
