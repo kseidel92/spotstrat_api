@@ -443,7 +443,8 @@ function extractStrategy(text) {
 }
 
 function vagueAsk(result) {
-  return result && result.ask && /Não achei o gatilho|Descreve o gatilho/.test(result.ask);
+  const ask = String((result && result.ask) || (result && result.questions && result.questions[0]) || '');
+  return ask && (/Não achei o gatilho|Descreve o gatilho/.test(ask) || isVagueTriggerAsk(ask));
 }
 
 /** Chamar OpenAI/Anthropic quando o brief já existe mas ainda falta o JS (scratch, guide, prompt longo). */
@@ -539,7 +540,16 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
       provider,
     };
   }
-  if (settled.ask && !vagueAsk(settled)) return { ...settled, provider };
+  if (settled.ask && !vagueAsk(settled)) {
+    if (known && isVagueTriggerAsk(settled.ask)) {
+      return {
+        failed: true,
+        error: 'Não consegui fechar o código desta regra agora. Tente criar de novo em instantes.',
+        provider,
+      };
+    }
+    return { ...settled, provider };
+  }
   if (known) {
     return {
       failed: true,
