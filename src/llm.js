@@ -1,6 +1,7 @@
 const { validateRecipe, netRR, MIN_NET_RR, OPS } = require('./shared');
 const { CATALOG, fromModel, RESPONSE_SCHEMA, systemPrompt } = require('./llmSchema');
 const { refusesSwap } = require('./interpret');
+const { infeasiblePrompt } = require('./feasibility');
 const { recipeFromModel } = require('./script');
 const { buildJsRecipe } = require('./sandbox');
 
@@ -126,7 +127,38 @@ function materialize(base, locale) {
 }
 
 function confirmingText(text) {
-  return /^(sim|pode|ok|isso|confirmo|pode usar|fecha|manda)\b/i.test(String(text || '').trim());
+  const t = String(text || '').trim();
+  if (!t) return false;
+  return /^(sim|pode|ok|isso|confirmo|pode usar|fecha|manda|deixar a ia|deixe a ia|use o padr[aã]o|usar o padr[aã]o|pode usar o padr[aã]o|let the ai|use the default)\b/i.test(t)
+    || /padr[aã]o que fecha a regra|sem mudar o gatilho|default that closes the rule/i.test(t);
+}
+
+function userBlob(messages) {
+  return (messages || []).filter((m) => m.role === 'user').map((m) => String(m.content || '')).join('\n');
+}
+
+/** Guided brief / long spec already carries the entry — never re-ask the trigger. */
+function triggerAlreadyKnown(messages, options) {
+  if (options && options.guided) return true;
+  const blob = userBlob(messages);
+  if (!blob.trim()) return false;
+  if (/(?:^|\n)\s*Entrada:\s*.{8,}/im.test(blob)) return true;
+  if (/\bBrief\./i.test(blob) && blob.length > 80) return true;
+  if (/scratchPromptLead|Crie uma estratégia de compra|Create a spot buy strategy/i.test(blob) && blob.length > 80) return true;
+  if (blob.length > 160 && /(?:compra|compro|buy|entrada|gatilho|engolf|ema|romp)/i.test(blob)) return true;
+  return false;
+}
+
+function isVagueTriggerAsk(ask) {
+  return /Quando (exatamente )?a estrat[eé]gia deve comprar|Descrev[ae] o (movimento|gatilho)|N[aã]o achei o gatilho|Qual [eé] o gatilho|Reenvia o gatilho|Diz o movimento e a janela/i
+    .test(String(ask || ''));
+}
+
+function forceCodeAsk() {
+  return {
+    ask: 'O pedido / brief já tem o gatilho. Não pergunte de novo. Escreva function strategy(ctx) completo agora, com stop e alvo em %, e deixe ask/questions vazios.',
+    retry: true,
+  };
 }
 
 function looksInternal(text) {
@@ -243,7 +275,7 @@ function optionNote(options) {
 
 /** Asks meant for the model retry loop — never show these to the end user. */
 function isInternalAsk(ask) {
-  return /ctx\.(sma|ema|vwap|rsi|trades|book|memory|atr|candles)|function strategy|Declare no thesis|Escreva o código|Não pergunte|Não crio uma estratégia diferente|Use ctx\.|Remova do código|mare_mode|stop: null|candles\.volume|ATR\(14\)|O filtro de maré já está|O pedido cita média|O pedido descreve|O pedido pede média/i
+  return /ctx\.(sma|ema|vwap|rsi|trades|book|memory|atr|candles)|function strategy|Declare no thesis|Escreva o código|Não pergunte|Não crio uma estratégia diferente|Use ctx\.|Remova do código|mare_mode|stop: null|candles\.volume|ATR\(14\)|O filtro de maré já está|O pedido cita média|O pedido descreve|O pedido pede média|Escreva esses percentuais|No buy:\s*stop:|O brief já define stop/i
     .test(String(ask || ''));
 }
 
@@ -253,14 +285,29 @@ function settle(data, { messages, locale, current, mode, options }) {
   const lastText = (last && last.content) || '';
   const chosen = optionNote(options);
   const blob = users.map((m) => m.content).join('\n') + (chosen ? `\n${chosen}` : '');
+  const known = triggerAlreadyKnown(messages, options);
   if (!data) {
+    if (known || confirmingText(lastText)) return forceCodeAsk();
     if (lastText.trim().length < 8 && !confirmingText(lastText)) {
       return { ask: 'Descreve o gatilho em uma frase: o movimento, a janela, e se quiser o stop e o alvo.' };
     }
     return { ask: 'Não achei o gatilho. Diz o movimento e a janela, por exemplo: sobe 1% em 3 minutos.' };
   }
-  if (refusesSwap(lastText)) return { ask: 'Não crio uma estratégia diferente da que você descreveu.' };
-  if (data.code || data.ask || (Array.isArray(data.questions) && data.questions.length)) return buildJsRecipe(data, blob, locale, { ...(options || {}), alarm: mode === 'alarm' });
+  if (refusesSwap(lastText) && !known && !confirmingText(lastText)) {
+    return { ask: 'Não crio uma estratégia diferente da que você descreveu.' };
+  }
+  if (data.code || data.ask || (Array.isArray(data.questions) && data.questions.length)) {
+    const built = buildJsRecipe(data, blob, locale, { ...(options || {}), alarm: mode === 'alarm' });
+    if (built.failed) return built;
+    // Model asked again for the trigger even though the thread already has it — keep retrying silently.
+    if (!built.recipe && (built.ask || (built.questions && built.questions.length))) {
+      const q = (built.questions && built.questions[0]) || built.ask || '';
+      if ((isInternalAsk(q) || isVagueTriggerAsk(q)) && (known || confirmingText(lastText))) {
+        return forceCodeAsk();
+      }
+    }
+    return built;
+  }
   return recipeFromModel(data, blob, locale);
 }
 
@@ -398,6 +445,14 @@ function vagueAsk(result) {
   return result && result.ask && /Não achei o gatilho|Descreve o gatilho/.test(result.ask);
 }
 
+/** Chamar OpenAI/Anthropic quando o brief já existe mas ainda falta o JS (scratch, guide, prompt longo). */
+function needsProviderCall(local, messages, options) {
+  if (vagueAsk(local)) return true;
+  if (local && local.retry) return true;
+  if (triggerAlreadyKnown(messages, options)) return true;
+  return false;
+}
+
 const ALARM_NOTE = [
   'Este pedido é um alarme. A pessoa já marcou som, e-mail ou os dois. Isso não é trabalho do código.',
   'O desk toca o som e manda o e-mail quando strategy devolve { action: "alert", stop, target }.',
@@ -407,15 +462,25 @@ const ALARM_NOTE = [
 ].join('\n');
 
 async function completeRecipe({ messages, locale, current, labContext, mode, options, exitHint }) {
+  const blocked = infeasiblePrompt(userBlob(messages), locale);
+  if (blocked) return { ...blocked, provider: 'local' };
+
   const local = settle(null, { messages, locale, current, mode, options });
   const openai = secret('OPENAI_API_KEY');
   const anthropic = secret('ANTHROPIC_API_KEY');
   const provider = openai ? 'openai' : anthropic ? 'anthropic' : '';
-  if (!provider || !vagueAsk(local)) return { ...local, provider: provider ? 'local' : 'mock' };
+  if (!provider) return { ...local, provider: 'mock' };
+  if (!needsProviderCall(local, messages, options)) return { ...local, provider: 'local' };
+
+  const known = triggerAlreadyKnown(messages, options);
   const extra = [
     current ? `Receita atual (mude só o que o usuário pediu): ${JSON.stringify(current)}` : '',
     labContext ? `Histórico antigo de preço, só vela. O ao vivo tem ctx.trades e ctx.book: ${labContext}` : '',
     'Escreva function strategy(ctx) com os números do pedido. Use ctx.trades e ctx.book só quando Entrada, Lista ou Saída descreverem fluxo, tape, aggTrades ou livro. A linha Fontes sozinha não obriga filtro. Agressão por N segundos exige persistência em ctx.memory, não um único snapshot. Candle de reversão bullish exige pavio inferior >= corpo e pavio superior < corpo. Se faltar um número, COMPLETE com o padrão do produto (stop 0,8%, alvo 1,2%, lookback 20, etc.), declare no thesis e liste em defaults. Só pergunte se o gatilho for incompreensível.',
+    known
+      ? 'O brief já traz gatilho, saída e números. Não peça o gatilho de novo: devolva code com function strategy(ctx), ask e questions vazios.'
+      : '',
+    'Se o usuário negar stop/alvo fixos e pedir saída só por indicador (ex.: RSI), NÃO escreva “como você pediu” para esses %; priorize a saída que ele pediu no final.',
     optionNote(options),
     exitHint || '',
     mode === 'alarm' ? ALARM_NOTE : '',
@@ -440,6 +505,7 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
     }
   }
   let settled = settle(data, { messages, locale, current, mode, options });
+  if (settled.failed) return { ...settled, provider };
   for (let fix = 0; fix < 4 && settled.retry; fix++) {
     try {
       const note = `${extra}\n${settled.ask}`;
@@ -447,6 +513,7 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
         ? await callOpenAI({ messages, locale, extra: note })
         : await callAnthropic({ messages, locale, extra: note });
       const second = settle(again, { messages, locale, current, mode, options });
+      if (second.failed) { settled = second; break; }
       if (second.recipe || (second.ask && !vagueAsk(second))) settled = second;
     } catch (err) {
       console.error('[llm]', err.message);
@@ -454,8 +521,15 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
     }
   }
   if (settled.recipe) return { ...settled, provider };
-  // Internal retry asks must never leak to the UI as needs_user questions.
-  if (settled.ask && isInternalAsk(settled.ask)) {
+  // Internal / vague-trigger asks after retries: guided threads fail closed instead of looping the UI.
+  if (settled.ask && (isInternalAsk(settled.ask) || (known && isVagueTriggerAsk(settled.ask)))) {
+    if (known) {
+      return {
+        failed: true,
+        error: 'Não consegui fechar o código desta regra agora. Tente criar de novo em instantes — o plano já está salvo na conversa.',
+        provider,
+      };
+    }
     return {
       ask: 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela (ex.: sobe 1% em 3 minutos). Se quiser, diga também o stop e o alvo em %.',
       questions: ['Quando a estratégia deve comprar?'],
@@ -464,6 +538,13 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
     };
   }
   if (settled.ask && !vagueAsk(settled)) return { ...settled, provider };
+  if (known) {
+    return {
+      failed: true,
+      error: 'Não fechei o código desta regra. Tente de novo — o assistente já tem o plano completo.',
+      provider,
+    };
+  }
   return {
     ask: 'Não fechei o código. Reenvia o gatilho que eu escrevo de novo.',
     questions: ['Qual é o gatilho de entrada, com a porcentagem e o tempo?'],
@@ -639,5 +720,7 @@ function suggestGuide(guide, step) {
 }
 
 module.exports = {
-  completeRecipe, completeLabChat, mockComplete, settle, parseModelJson, isInternalAsk, CATALOG, detectKind, baseRecipe, suggestGuide,
+  completeRecipe, completeLabChat, mockComplete, settle, parseModelJson, isInternalAsk,
+  triggerAlreadyKnown, isVagueTriggerAsk, confirmingText, needsProviderCall,
+  CATALOG, detectKind, baseRecipe, suggestGuide,
 };

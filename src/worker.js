@@ -342,14 +342,24 @@ async function applyHistoryFit(job, result, messages) {
   }
   // Never bubble internal model-retry asks to needs_user from history rewrite.
   if (again.ask && !again.recipe) {
-    const { isInternalAsk } = require('./llm');
-    if (isInternalAsk(again.ask)) return result.recipe ? result : {
-      ask: 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela.',
-      questions: ['Quando a estratégia deve comprar?'],
-      suggestions: ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'],
-    };
+    const { isInternalAsk, triggerAlreadyKnown, isVagueTriggerAsk } = require('./llm');
+    if (isInternalAsk(again.ask) || (triggerAlreadyKnown(messages, options) && isVagueTriggerAsk(again.ask))) {
+      if (result.recipe) return result;
+      if (triggerAlreadyKnown(messages, options)) {
+        return {
+          failed: true,
+          error: 'Não consegui fechar o código após medir a saída no histórico. Tente criar de novo.',
+          provider: again.provider || result.provider,
+        };
+      }
+      return {
+        ask: 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela.',
+        questions: ['Quando a estratégia deve comprar?'],
+        suggestions: ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'],
+      };
+    }
   }
-  return again.recipe || again.ask ? again : result;
+  return again.recipe || again.ask || again.failed ? again : result;
 }
 
 async function runJob(job) {
@@ -393,12 +403,39 @@ async function runJob(job) {
     options: input.options || null,
   });
   result = await applyHistoryFit(job, result, messages);
+  if (result.failed || result.error) {
+    const human = String(result.error || 'Não fechei a receita agora. Tente de novo em instantes.');
+    await say(job.thread_id, human, null).catch(() => {});
+    await finish(job, {
+      status: 'failed',
+      error: human,
+      output: { provider: result.provider },
+      detail: human,
+      errorStage: 'llm',
+      httpStatus: 200,
+    });
+    return;
+  }
   if (result.ask || (result.questions && result.questions.length)) {
-    const { isInternalAsk } = require('./llm');
+    const { isInternalAsk, triggerAlreadyKnown, isVagueTriggerAsk } = require('./llm');
+    const options = input.options || {};
     let questions = (result.questions && result.questions.length) ? result.questions : [result.ask];
     let ask = questions[0];
     // Safety net: never surface model-retry / eng prompts as needs_user.
-    if (isInternalAsk(ask)) {
+    if (isInternalAsk(ask) || (triggerAlreadyKnown(messages, options) && isVagueTriggerAsk(ask))) {
+      if (triggerAlreadyKnown(messages, options) || (options.guided && options.exit === 'manual')) {
+        const human = 'Não consegui fechar o código desta regra agora. Tente criar de novo em instantes.';
+        await say(job.thread_id, human, null).catch(() => {});
+        await finish(job, {
+          status: 'failed',
+          error: human,
+          output: { provider: result.provider },
+          detail: human,
+          errorStage: 'llm',
+          httpStatus: 200,
+        });
+        return;
+      }
       ask = 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela (ex.: sobe 1% em 3 minutos). Se quiser, diga também o stop e o alvo em %.';
       questions = [ask];
     }
@@ -415,9 +452,23 @@ async function runJob(job) {
   }
   const shaped = await shapeRecipe(job, result.recipe);
   if (shaped.ask) {
-    const { isInternalAsk } = require('./llm');
+    const { isInternalAsk, triggerAlreadyKnown, isVagueTriggerAsk } = require('./llm');
+    const options = input.options || {};
     let ask = shaped.ask;
-    if (isInternalAsk(ask)) {
+    if (isInternalAsk(ask) || (triggerAlreadyKnown(messages, options) && isVagueTriggerAsk(ask))) {
+      if (triggerAlreadyKnown(messages, options)) {
+        const human = 'Não consegui validar a receita agora. Tente criar de novo em instantes.';
+        await say(job.thread_id, human, null).catch(() => {});
+        await finish(job, {
+          status: 'failed',
+          error: human,
+          output: { provider: result.provider },
+          detail: human,
+          errorStage: 'shape',
+          httpStatus: 200,
+        });
+        return;
+      }
       ask = 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela.';
     }
     const suggestions = ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'];
@@ -430,6 +481,7 @@ async function runJob(job) {
     return;
   }
   const recipe = shaped.recipe;
+  syncExitFromCode(recipe);
   if (input.mode === 'alarm' && !input.strategyId) {
     const alarmId = await saveAlarm(job, recipe);
     await finish(job, {

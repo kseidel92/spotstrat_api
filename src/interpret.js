@@ -54,7 +54,7 @@ function specs(raw, t) {
       plan: { kind: 'chandelier', exact: true, noTarget: true, tfMin: 240, ema: 50, emaLookback: 5, atr: 14, atrMult: 3 },
     });
   }
-  if (/m[aá]xima dos [uú]ltimos 20|m[aá]xima dos 20/.test(t) && /volume/.test(t)) {
+  if (/m[aá]xima (?:das|dos) (?:\d+ )?(?:velas|últim)/.test(t) && /volume/.test(t)) {
     return pack({
       name: titleFrom(raw, 'Donchian 20'),
       thesis: 'No 1h, compra se o candle fechar acima da máxima das 20 velas anteriores e o volume dessa vela for pelo menos 1,5 vez a média dessas 20. Sai na mínima das 10 velas anteriores ou a -3% da entrada, o que vier primeiro.',

@@ -3,6 +3,7 @@ const path = require('path');
 const vm = require('vm');
 const { validateRecipe, promptNumbers, brtDay, localeFamily } = require('./shared');
 const { bars } = require('./faithful');
+const { nonExecutableJs, userRejectedFixedExit, exitIsIndicatorOnly } = require('./feasibility');
 
 const DIR = path.join(__dirname, '../data/strategies');
 const MARK = '\n// --- strategy ---\n';
@@ -716,13 +717,40 @@ function persistAggressionAsk(code, userText) {
   return `Agressão por pelo menos ${sec} segundos exige persistência. Grave em ctx.memory o instante em que o saldo líquido ficou comprador. Só registre o preço médio quando ctx.now - m.since >= ${sec} * 1000 (ou >= ${sec * 1000}). Se o saldo deixar de ser comprador, delete esse instante. Uma leitura única de ctx.trades(${sec} * 1000) com saldo positivo não prova ${sec} segundos.`;
 }
 
+/** Remove stop/target no objeto buy quando a pessoa pediu saída só por indicador. */
+/** Garante literais de stop/alvo no buy quando o wizard já escolheu %. */
+function patchManualExitLiterals(code, options) {
+  if (!options || options.exit !== 'manual') return String(code || '');
+  const stop = Number(options.stopPct);
+  const target = Number(options.tpPct);
+  if (!(stop > 0 && target > 0)) return String(code || '');
+  let src = String(code || '');
+  if (codeHasNumber(src, stop) && codeHasNumber(src, target)) return src;
+  if (!/action\s*:\s*['"]buy['"]/i.test(src)) return src;
+  return src.replace(
+    /(\{[^{}]*action\s*:\s*['"]buy['"][^{}]*)(\})/gi,
+    (full, head, close) => {
+      let chunk = head;
+      if (!/\bstop\s*:/i.test(chunk)) chunk += `, stop: price * (1 - ${stop}/100)`;
+      if (!/\btarget\s*:/i.test(chunk)) chunk += `, target: price * (1 + ${target}/100)`;
+      return `${chunk}${close}`;
+    },
+  );
+}
+
+function scrubBuyOcoForIndicatorExit(code) {
+  return String(code || '')
+    .replace(/(\{[^}]*action\s*:\s*['"]buy['"][^}]*)\bstop\s*:\s*[^,}]+/gi, '$1stop: null')
+    .replace(/(\{[^}]*action\s*:\s*['"]buy['"][^}]*)\btarget\s*:\s*[^,}]+/gi, '$1target: null');
+}
+
 function chosenExitAsk(code, options) {
   if (!options) return '';
   const stop = Number(options.stopPct);
   const target = Number(options.tpPct);
   // Always enforce explicit manual exits (including guided wizards).
   if (options.exit === 'manual' && stop > 0 && target > 0 && (!codeHasNumber(code, stop) || !codeHasNumber(code, target))) {
-    return `O stop é ${stop}% e o alvo é ${target}% a partir da entrada. Escreva esses percentuais no buy.`;
+    return `O brief já define stop ${stop}% e alvo ${target}%. No buy: stop: price * (1 - ${stop}/100), target: price * (1 + ${target}/100). Declare no thesis. Escreva o código. Não pergunte.`;
   }
   if (options.guided) return '';
   const hold = Number(options.maxHoldMin);
@@ -835,6 +863,13 @@ function buildJsRecipe(data, userText, locale, options) {
     if (autoFill && (isNumericGapQuestion(question) || !question)) {
       return { ask: autoFillRetryAsk(question, userText), retry: true };
     }
+    const briefKnown = /(?:^|\n)\s*Entrada:\s*.{8,}/im.test(userText)
+      || (/\bBrief\./i.test(userText) && String(userText).length > 80)
+      || (options && options.guided);
+    const vagueTrigger = /Quando (exatamente )?a estrat[eé]gia deve comprar|Descrev[ae] o (movimento|gatilho)|N[aã]o achei o gatilho|Qual [eé] o gatilho/i.test(question);
+    if (briefKnown && (vagueTrigger || !question)) {
+      return { ask: autoFillRetryAsk(question, userText), retry: true };
+    }
     const suggestions = autoFill
       ? ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Janela de 15 minutos']
       : [];
@@ -853,36 +888,40 @@ function buildJsRecipe(data, userText, locale, options) {
     const filled = defaults.map((item) => `${item.label} ${item.value}`).join('; ');
     return { ask: `Use estes padrões e escreva o código: ${filled}. Declare no thesis.`, retry: true };
   }
-  const numbers = checkNumbers(code, userText, defaults, locale);
+  let codeWorking = patchManualExitLiterals(code, options);
+  if (exitIsIndicatorOnly(userText)) {
+    codeWorking = scrubBuyOcoForIndicatorExit(codeWorking);
+  }
+  const numbers = checkNumbers(codeWorking, userText, defaults, locale);
   if (!numbers.ok) return { ask: numbers.error, retry: true };
-  const chosen = chosenExitAsk(code, options);
+  const chosen = chosenExitAsk(codeWorking, options);
   if (chosen) return { ask: chosen, retry: true };
-  const book = bookCoverageAsk(code, userText);
+  const book = bookCoverageAsk(codeWorking, userText);
   if (book) return { ask: book, retry: true };
-  const trades = tradesCoverageAsk(code, userText);
+  const trades = tradesCoverageAsk(codeWorking, userText);
   if (trades) return { ask: trades, retry: true };
-  const averages = averagesCoverageAsk(code, userText);
+  const averages = averagesCoverageAsk(codeWorking, userText);
   if (averages) return { ask: averages, retry: true };
-  const mareDup = mareReinventionAsk(code, options);
+  const mareDup = mareReinventionAsk(codeWorking, options);
   if (mareDup) return { ask: mareDup, retry: true };
-  const reversal = reversalAsk(code, userText);
+  const reversal = reversalAsk(codeWorking, userText);
   if (reversal) return { ask: reversal, retry: true };
-  const persistAgg = persistAggressionAsk(code, userText);
+  const persistAgg = persistAggressionAsk(codeWorking, userText);
   if (persistAgg) return { ask: persistAgg, retry: true };
-  const returned = returnAsk(code, userText);
+  const returned = returnAsk(codeWorking, userText);
   if (returned) return { ask: returned, retry: true };
-  const origin = originCandleAsk(code, userText);
+  const origin = originCandleAsk(codeWorking, userText);
   if (origin) return { ask: origin, retry: true };
-  const region = regionAsk(code, userText);
+  const region = regionAsk(codeWorking, userText);
   if (region) return { ask: region, retry: true };
-  if (/pin bar bullish/i.test(userText) && !/close\s*>\s*[\w.]*open/.test(code)) {
+  if (/pin bar bullish/i.test(userText) && !/close\s*>\s*[\w.]*open/.test(codeWorking)) {
     return { ask: 'O pin bar bullish fecha acima da abertura. Mantenha o pavio inferior e o suporte já definidos.', retry: true };
   }
-  if (/fechar abaixo/i.test(userText) && /\.time\s*>\s*ctx\.position\.openedAt/.test(code)) {
+  if (/fechar abaixo/i.test(userText) && /\.time\s*>\s*ctx\.position\.openedAt/.test(codeWorking)) {
     return { ask: 'A vela que fecha abaixo conta pelo instante de fechamento: time da vela mais a duração. A abertura pode ser anterior à entrada. Mantenha o resto.', retry: true };
   }
   const alarm = !!(options && options.alarm);
-  if (alarm && !signalsAlarm(code)) {
+  if (alarm && !signalsAlarm(codeWorking)) {
     return {
       ask: 'Quando a condição for verdadeira, devolva { action: "alert", stop, target }. hold só quando ainda não aconteceu. O som e o e-mail o desk envia. Não escreva que o código não notifica.',
       retry: true,
@@ -895,15 +934,21 @@ function buildJsRecipe(data, userText, locale, options) {
     data.exitText = cleanAlarmText(data.exitText, 'A ordem continua sua.');
     data.risks = cleanAlarmText(data.risks, 'Paper. O aviso não abre ordem.');
   }
-  const ran = validateCode(code);
+  const ran = validateCode(codeWorking);
   if (!ran.ok) return { ask: `O código quebrou na validação: ${ran.error}`, retry: true };
   const userStop = namedExitPct(userText, 'stop');
   const userTarget = namedExitPct(userText, 'target');
+  const contradictory = userRejectedFixedExit(userText);
   const scrubClaim = (s) => {
     let out = String(s || '');
-    // Only rewrite attribution when the person did NOT write stop/target %.
+  // Only rewrite attribution when the person did NOT write stop/target %.
     if (userStop == null && userTarget == null) {
       out = scrubFalseExitClaims(out);
+    } else if (contradictory) {
+      out = out
+        .replace(/como voc[eê] pediu/gi, 'no trecho inicial do texto (você depois pediu outra saída)')
+        .replace(/conforme o pedido/gi, 'no trecho inicial do texto')
+        .replace(/como pedido/gi, 'no trecho inicial do texto');
     }
     return out;
   };
@@ -931,7 +976,7 @@ function buildJsRecipe(data, userText, locale, options) {
       assumptions.push({ label: 'alvo', value: `${DEFAULT_TARGET_PCT}%` });
     }
   }
-  const fromCode = exitPctFromCode(code);
+  const fromCode = exitPctFromCode(codeWorking);
   const stopPct = fromCode.stopPct != null ? fromCode.stopPct : (userStop != null ? userStop : 1);
   const tpPct = fromCode.tpPct != null ? fromCode.tpPct : (userTarget != null ? userTarget : 1);
   const recipe = {
@@ -944,10 +989,21 @@ function buildJsRecipe(data, userText, locale, options) {
     plan: { kind: 'js', exact: true },
     defaults,
     assumptions,
-    code,
+    code: codeWorking,
   };
   const check = validateRecipe(recipe);
   if (!check.ok) return { ask: 'Não fechei a estratégia.', retry: true };
+  syncExitFromCode(recipe);
+  const loc = localeFamily(locale);
+  const dead = nonExecutableJs(code, text.thesis);
+  if (dead) {
+    const msgPt = 'Não dá para criar essa estratégia: o pedido usa sinais que o simulador não mede (ex.: lua, spread exato ou dados fora do par). Reformule com velas, volume, médias, livro ou tape.';
+    const msgEn = 'We cannot create this strategy: the request uses signals the simulator cannot measure. Rephrase using candles, volume, averages, book or tape.';
+    return {
+      failed: true,
+      error: /^pt/i.test(loc) ? msgPt : msgEn,
+    };
+  }
   return { recipe };
 }
 
@@ -955,13 +1011,22 @@ function buildJsRecipe(data, userText, locale, options) {
 function exitPctFromCode(code) {
   const src = String(code || '');
   const stopMatch = src.match(/stop\s*:\s*[^,\n}]*?1\s*-\s*(\d+(?:\.\d+)?)\s*\/\s*100/i)
+    || src.match(/stop\s*:\s*[^,\n}]*?1\s*\+\s*(\d+(?:\.\d+)?)\s*\/\s*100/i)
     || src.match(/1\s*-\s*(\d+(?:\.\d+)?)\s*\/\s*100/);
   const targetMatch = src.match(/target\s*:\s*[^,\n}]*?1\s*\+\s*(\d+(?:\.\d+)?)\s*\/\s*100/i)
+    || src.match(/target\s*:\s*[^,\n}]*?1\s*-\s*(\d+(?:\.\d+)?)\s*\/\s*100/i)
     || src.match(/1\s*\+\s*(\d+(?:\.\d+)?)\s*\/\s*100/);
-  return {
-    stopPct: stopMatch ? Number(stopMatch[1]) : null,
-    tpPct: targetMatch ? Number(targetMatch[1]) : null,
-  };
+  let stopPct = stopMatch ? Number(stopMatch[1]) : null;
+  let tpPct = targetMatch ? Number(targetMatch[1]) : null;
+  const stopFactor = src.match(/stop\s*:\s*[^,\n}]*?\*\s*(0\.\d{1,5})\b/i);
+  const targetFactor = src.match(/target\s*:\s*[^,\n}]*?\*\s*(1\.\d{1,5})\b/i);
+  if (stopPct == null && stopFactor) stopPct = Math.round((1 - Number(stopFactor[1])) * 1000) / 10;
+  if (tpPct == null && targetFactor) tpPct = Math.round((Number(targetFactor[1]) - 1) * 1000) / 10;
+  const entryStopMul = src.match(/<=\s*\w+\s*\*\s*(0\.\d{1,5})\b/);
+  const entryTpMul = src.match(/>=\s*\w+\s*\*\s*(1\.\d{1,5})\b/);
+  if (stopPct == null && entryStopMul) stopPct = Math.round((1 - Number(entryStopMul[1])) * 1000) / 10;
+  if (tpPct == null && entryTpMul) tpPct = Math.round((Number(entryTpMul[1]) - 1) * 1000) / 10;
+  return { stopPct, tpPct };
 }
 
 /** Remove claims that attribute measured/default exits to the user. */

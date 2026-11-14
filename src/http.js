@@ -1282,6 +1282,14 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
     }
     return { status: 400, error: { error: 'invalid_body', message: 'Escreve o pedido.' } };
   }
+  if (prompt.length < 8) {
+    const shortMsg = 'Descreve o gatilho em uma frase: o movimento, a janela, e se quiser o stop e o alvo.';
+    await savePrompt(req, {
+      prompt, mode, status: 'rejected', detail: shortMsg, threadId, strategyId,
+      httpStatus: 400, errorStage: 'http',
+    });
+    return { status: 400, error: { error: 'invalid_body', message: shortMsg } };
+  }
   if (!allow(`prompt-h:${req.user.id}`, 60, 3600_000)) {
     await savePrompt(req, {
       prompt, mode, status: 'rejected', detail: 'Muitos prompts em pouco tempo.', threadId, strategyId,
