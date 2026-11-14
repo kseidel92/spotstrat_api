@@ -464,21 +464,31 @@ async function runJob(job) {
     const { isInternalAsk, triggerAlreadyKnown, isVagueTriggerAsk } = require('./llm');
     const options = input.options || {};
     let ask = shaped.ask;
-    if (isInternalAsk(ask) || (triggerAlreadyKnown(messages, options) && isVagueTriggerAsk(ask))) {
-      if (triggerAlreadyKnown(messages, options)) {
-        const human = 'Não consegui validar a receita agora. Tente criar de novo em instantes.';
-        await say(job.thread_id, human, null).catch(() => {});
-        await finish(job, {
-          status: 'failed',
-          error: human,
-          output: { provider: result.provider },
-          detail: human,
-          errorStage: 'shape',
-          httpStatus: 200,
-        });
-        return;
-      }
-      ask = 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela.';
+    if (isInternalAsk(ask)) {
+      const human = 'Não consegui validar a receita agora. Tente criar de novo em instantes.';
+      await say(job.thread_id, human, null).catch(() => {});
+      await finish(job, {
+        status: 'failed',
+        error: human,
+        output: { provider: result.provider },
+        detail: human,
+        errorStage: 'shape',
+        httpStatus: 200,
+      });
+      return;
+    }
+    if (triggerAlreadyKnown(messages, options) && isVagueTriggerAsk(ask)) {
+      const human = 'Não consegui validar a receita agora. Tente criar de novo em instantes.';
+      await say(job.thread_id, human, null).catch(() => {});
+      await finish(job, {
+        status: 'failed',
+        error: human,
+        output: { provider: result.provider },
+        detail: human,
+        errorStage: 'shape',
+        httpStatus: 200,
+      });
+      return;
     }
     const suggestions = ['Deixar a IA decidir', 'Stop 0,8% e alvo 1,2%', 'Usar janela de 15 minutos'];
     await say(job.thread_id, ask, null);

@@ -150,7 +150,7 @@ function triggerAlreadyKnown(messages, options) {
 }
 
 function isVagueTriggerAsk(ask) {
-  return /Quando (exatamente )?a estrat[eé]gia deve comprar|Descrev[ae] o (movimento|gatilho)|N[aã]o achei o gatilho|Qual [eé] o gatilho|Reenvia o gatilho|Diz o movimento e a janela/i
+  return /Quando (exatamente )?a estrat[eé]gia deve comprar|Quando a estrat[eé]gia deve comprar|Descrev[ae] o (movimento|gatilho)|N[aã]o achei o gatilho|Qual [eé] o gatilho|Reenvia o gatilho|Diz o movimento e a janela/i
     .test(String(ask || ''));
 }
 

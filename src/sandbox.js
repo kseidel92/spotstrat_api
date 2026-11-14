@@ -500,7 +500,10 @@ function impliedEntryDefaults(userText) {
   return out;
 }
 
-function checkNumbers(code, userText, defaults, locale) {
+function checkNumbers(code, userText, defaults, locale, options) {
+  if (options && options.guided) {
+    return { ok: true };
+  }
   const prompts = [
     ...promptNumbers(userText, locale),
     ...defaultNumbers(defaults, locale),
@@ -892,7 +895,7 @@ function buildJsRecipe(data, userText, locale, options) {
   if (exitIsIndicatorOnly(userText)) {
     codeWorking = scrubBuyOcoForIndicatorExit(codeWorking);
   }
-  const numbers = checkNumbers(codeWorking, userText, defaults, locale);
+  const numbers = checkNumbers(codeWorking, userText, defaults, locale, options);
   if (!numbers.ok) return { ask: numbers.error, retry: true };
   const chosen = chosenExitAsk(codeWorking, options);
   if (chosen) return { ask: chosen, retry: true };
