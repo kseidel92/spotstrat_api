@@ -422,22 +422,31 @@ async function runJob(job) {
     let questions = (result.questions && result.questions.length) ? result.questions : [result.ask];
     let ask = questions[0];
     // Safety net: never surface model-retry / eng prompts as needs_user.
-    if (isInternalAsk(ask) || (triggerAlreadyKnown(messages, options) && isVagueTriggerAsk(ask))) {
-      if (triggerAlreadyKnown(messages, options) || (options.guided && options.exit === 'manual')) {
-        const human = 'Não consegui fechar o código desta regra agora. Tente criar de novo em instantes.';
-        await say(job.thread_id, human, null).catch(() => {});
-        await finish(job, {
-          status: 'failed',
-          error: human,
-          output: { provider: result.provider },
-          detail: human,
-          errorStage: 'llm',
-          httpStatus: 200,
-        });
-        return;
-      }
-      ask = 'Quando exatamente a estratégia deve comprar? Descreva o movimento e a janela (ex.: sobe 1% em 3 minutos). Se quiser, diga também o stop e o alvo em %.';
-      questions = [ask];
+    if (isInternalAsk(ask)) {
+      const human = 'Não consegui fechar o código desta regra agora. Tente criar de novo em instantes.';
+      await say(job.thread_id, human, null).catch(() => {});
+      await finish(job, {
+        status: 'failed',
+        error: human,
+        output: { provider: result.provider },
+        detail: human,
+        errorStage: 'llm',
+        httpStatus: 200,
+      });
+      return;
+    }
+    if (triggerAlreadyKnown(messages, options) && isVagueTriggerAsk(ask)) {
+      const human = 'Não consegui fechar o código desta regra agora. Tente criar de novo em instantes.';
+      await say(job.thread_id, human, null).catch(() => {});
+      await finish(job, {
+        status: 'failed',
+        error: human,
+        output: { provider: result.provider },
+        detail: human,
+        errorStage: 'llm',
+        httpStatus: 200,
+      });
+      return;
     }
     const suggestions = Array.isArray(result.suggestions) && result.suggestions.length
       ? result.suggestions

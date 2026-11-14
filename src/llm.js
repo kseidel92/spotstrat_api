@@ -275,7 +275,7 @@ function optionNote(options) {
 
 /** Asks meant for the model retry loop — never show these to the end user. */
 function isInternalAsk(ask) {
-  return /ctx\.(sma|ema|vwap|rsi|trades|book|memory|atr|candles)|function strategy|Declare no thesis|Escreva o código|Não pergunte|Não crio uma estratégia diferente|Use ctx\.|Remova do código|mare_mode|stop: null|candles\.volume|ATR\(14\)|O filtro de maré já está|O pedido cita média|O pedido descreve|O pedido pede média|Escreva esses percentuais|No buy:\s*stop:|O brief já define stop/i
+  return /ctx\.(sma|ema|vwap|rsi|trades|book|memory|atr|candles)|function strategy|Declare no thesis|Escreva o código|Não pergunte|Não crio uma estratégia diferente|Use ctx\.|Remova do código|mare_mode|stop: null|candles\.volume|ATR\(14\)|O filtro de maré já está|O pedido cita média|O pedido descreve|O pedido pede média|Escreva esses percentuais|No buy:\s*stop:|O brief já define stop|não está no pedido|Reescreva a condição com a quantidade|O número \d+/i
     .test(String(ask || ''));
 }
 
