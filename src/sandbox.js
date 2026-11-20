@@ -580,6 +580,7 @@ function ruleProse(text) {
   body = body.replace(/[^.!\n]*\bsem livro[^.!\n]*[.!]?/gi, '');
   // Nota interna do desk ("sem EMA usada como maré") não é pedido de média.
   body = body.replace(/[^.!\n]*\bsem\s+(?:ctx\.)?(?:ema|sma|rsi|vwap)\b[^.!\n]*/gi, '');
+  body = body.replace(/[^.!\n]*\bsem\s+(?:olhar\s+)?(?:as\s+)?m[eé]dias?\b[^.!\n]*/gi, '');
   body = body.replace(/[^.!\n]*n[aã]o implemente mar[eé][^.!\n]*/gi, '');
   return body;
 }

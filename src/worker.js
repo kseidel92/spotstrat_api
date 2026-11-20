@@ -2,7 +2,7 @@ const { pool } = require('./db');
 const { completeRecipe } = require('./llm');
 const { id, emptySnap, walletOf, netRR, MIN_NET_RR, validateRecipe, alarmSoundKind } = require('./shared');
 const { writeStrategyFile, syncExitFromCode } = require('./sandbox');
-const { executableFailure, gridFailure } = require('./feasibility');
+const { executableFailure, gridFailure, exitIsIndicatorOnly } = require('./feasibility');
 const lab = require('./lab');
 const bus = require('./bus');
 
@@ -284,6 +284,8 @@ async function applyHistoryFit(job, result, messages) {
   // Guided + history still runs fit so "measure on candles" stays honest.
   if (options.historyApplied) return result;
   if (options.guided && options.exit === 'manual') return result;
+  const userText = (messages || []).filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+  if (exitIsIndicatorOnly(userText)) return result;
   const fitStop = options.exit === 'history';
   const fitHold = !!(options.timeExit && options.time === 'history');
   if (!fitStop && !fitHold) return result;

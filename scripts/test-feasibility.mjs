@@ -1,4 +1,4 @@
-import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scrubCtxJargon } from '../src/feasibility.js';
+import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scrubCtxJargon, exitIsIndicatorOnly } from '../src/feasibility.js';
 import { interpret } from '../src/interpret.js';
 import { makeCtx, buildJsRecipe } from '../src/sandbox.js';
 import assert from 'assert';
@@ -141,5 +141,29 @@ assert(safeBuilt.recipe && !safeBuilt.failed, JSON.stringify(safeBuilt));
 assert(/ctx\.book\s*\(/.test(safeBuilt.recipe.code));
 assert(/ctx\.trades\s*\(/.test(safeBuilt.recipe.code));
 assert(!/conversa/i.test(JSON.stringify(safeBuilt.recipe.explanation)));
+
+const contradiction = 'QA20 Rompimento de 15m. Eu escrevi stop 0,5% e alvo 20%, mas na verdade quero sair só quando o RSI passar de 80, sem stop percentual.';
+assert(exitIsIndicatorOnly(contradiction), 'contradição final pede saída só por RSI');
+
+const bookOnlyText = `Brief.
+Entrada: Comprar quando o livro mostrar pressão compradora clara perto do preço, sem olhar médias.
+Fontes: livro de ofertas.
+Saída: Stop 1.1% e alvo 1.7% a partir da entrada.`;
+const bookOnlyCode = `function strategy(ctx) {
+  const book = ctx.book();
+  if (!book || ctx.position) return { action: "hold" };
+  const bid = (book.bids || []).reduce((s, l) => s + (l.qty || 0), 0);
+  const ask = (book.asks || []).reduce((s, l) => s + (l.qty || 0), 0);
+  if (!(bid > ask)) return { action: "hold" };
+  return { action: "buy", stop: ctx.price * (1 - 1.1 / 100), target: ctx.price * (1 + 1.7 / 100) };
+}`;
+const bookOnly = buildJsRecipe({
+  name: 'Só livro',
+  thesis: 'Compra quando o livro está comprador.',
+  code: bookOnlyCode,
+}, bookOnlyText, 'pt-BR', { guided: true, autoFill: true, exit: 'manual', stopPct: 1.1, tpPct: 1.7 });
+assert(bookOnly.recipe && !bookOnly.ask, JSON.stringify(bookOnly));
+assert(/ctx\.book\s*\(/.test(bookOnly.recipe.code));
+assert(!/ctx\.ema\s*\(|ctx\.sma\s*\(/.test(bookOnly.recipe.code));
 
 console.log('test-feasibility: ok');
