@@ -666,16 +666,21 @@ const GUIDE_SPEC = {
 };
 
 function guideKindOf(guide) {
+  const preset = String(guide?.preset || guide?.entryType || '');
+  if (preset && GUIDE_SPEC[preset] && GUIDE_SPEC[preset].stopPct != null) return preset;
   const text = String(guide?.entry || '');
   const t = text.toLowerCase();
-  if (/press[aã]o|fluxo|livro|tape|obi|mar[eé] boa/.test(t)) return 'pressure';
-  if (/recuper|caiu|queda|dump|rebote|despenc/.test(t)) return 'recovery';
-  if (/indicador|rsi|macd|m[eé]dia|ema|cruz/.test(t) && !/romp|breakout/.test(t)) return 'indicators';
+  if (/press[aã]o|fluxo|livro|tape|obi|mar[eé](?:\s+\S+){0,3}\s+boa/.test(t)) return 'pressure';
+  if (/recuper|caiu com for[cç]a|revers[aã]o|candle de for[cç]a/.test(t)) return 'recovery';
+  if (/romp|breakout/.test(t)) return 'breakout';
+  if (/cruzamento|cruzar|cruza|\bcross\b/.test(t)) return 'cross';
+  if (/indicador|\brsi\b|\bmacd\b|\bema\b|\bsma\b|m[eé]dias?/.test(t)) return 'indicators';
   const known = detectKind(text);
+  if (known === 'laggard' && /mar[eé](?:\s+\S+){0,3}\s+boa/.test(t)) return 'pressure';
+  if (known === 'range' && /romp|breakout/.test(t)) return 'breakout';
   if (known) return known;
   if (/engulf|engolfo|engolfe|padrão de vela|padrao de vela/.test(t)) return 'pattern';
-  if (/\bema\b|cruzamento|cruzar|cruza/.test(t)) return 'cross';
-  if (/romp|breakout|máxima das|maxima das/.test(t)) return 'breakout';
+  if (/\bema\b/.test(t)) return 'cross';
   if (/sobe|subir|impulso|momentum/.test(t)) return 'momentum';
   const type = String(guide?.entryType || '');
   if (GUIDE_SPEC[type]) return type;

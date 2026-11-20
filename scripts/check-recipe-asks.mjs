@@ -87,6 +87,17 @@ const g15 = suggestGuide({ entry: 'No 5m, em tendência de alta com média de 20
 assert(g15.list === 'no', 'caso 15 sem registrar nível fica sem lista');
 assert(g15.sources.includes('ema'), 'caso 15 mantém médias nas fontes');
 
+const breakoutText = 'Comprar no rompimento de uma faixa lateral, com confirmação de continuidade no curto prazo.';
+const crossText = 'Comprar quando a média rápida cruzar a média lenta para cima, com o preço acompanhando a tendência.';
+const gBreak = suggestGuide({ entry: breakoutText, preset: 'breakout' }, 'exit');
+assert(gBreak.kind === 'breakout' && gBreak.stop === '1.2' && gBreak.target === '2.2', JSON.stringify(gBreak));
+const gBreakText = suggestGuide({ entry: breakoutText }, 'exit');
+assert(gBreakText.kind === 'breakout' && gBreakText.stop === '1.2', JSON.stringify(gBreakText));
+const gCross = suggestGuide({ entry: crossText }, 'exit');
+assert(gCross.kind === 'cross' && gCross.stop === '0.8' && gCross.target === '1.6', JSON.stringify(gCross));
+const gMare = suggestGuide({ entry: 'Só operar quando a maré estiver boa.' }, 'exit');
+assert(gMare.kind === 'pressure' && gMare.stop === '0.9', JSON.stringify(gMare));
+
 const gPressure = suggestGuide({ entry: 'Comprar com pressão compradora no livro e maré boa.', sources: ['candles', 'book', 'trades'], list: 'no' }, 'exit');
 assert(gPressure.kind === 'pressure', 'pressão classifica kind pressure');
 assert(Number(gPressure.stop) > 0 && Number(gPressure.target) > 0, 'pressure devolve stop/alvo do catálogo');
