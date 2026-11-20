@@ -62,8 +62,41 @@ const DEAD_CODE_MSG = {
   en: 'We cannot create this strategy: the request uses signals the simulator cannot measure. Rephrase using candles, volume, averages, book or tape.',
 };
 
+const SHORT_TRIGGER_MSG = {
+  pt: 'Descreve o gatilho em uma frase: o movimento, a janela, e se quiser o stop e o alvo.',
+  en: 'Describe the trigger in one sentence: the move, the timeframe, and optionally stop and target.',
+};
+
 function isPt(locale) {
   return /^pt/i.test(locale || '');
+}
+
+/**
+ * O texto cita movimento, janela, par, indicador ou nível.
+ * "compra ja" não cita nenhum. Espelhado em front/src/lib/feasibility.js.
+ */
+function hasMarketTrigger(text) {
+  const t = String(text || '');
+  if (/(?:^|\n)\s*Entrada:\s*\S.{7,}/im.test(t)) return true;
+  if (/\bBrief\./i.test(t) && t.length > 40) return true;
+  if (/\d+(?:[.,]\d+)?\s*%/.test(t)) return true;
+  if (/\b\d+\s*(?:m|min|h|d|s)\b/i.test(t)) return true;
+  if (/\b\d+\s*-\s*(?:min(?:ute)?s?|horas?|hours?|velas?|candles?)\b/i.test(t)) return true;
+  if (/\b\d+\s*(?:minutos?|mins?|horas?|hours?|minutes?|segundos?|seconds?|velas?|candles?|dias?|days?)\b/i.test(t)) return true;
+  if (/\b(?:1m|3m|5m|15m|30m|1h|2h|4h|1d)\b/i.test(t)) return true;
+  if (/\b(?:btc|eth|sol|bnb|xrp|doge|ada|avax|dot|link|usdt|usdc)\b/i.test(t)) return true;
+  if (/\b[a-z0-9]{2,12}usdt\b/i.test(t)) return true;
+  if (/\b(?:rsi|ema|sma|macd|vwap|bollinger|atr|estoc[aá]stico|stochastic|volume|livro|tape|obi|m[eé]dias?|bandas?|book)\b/i.test(t)) return true;
+  if (/\b(?:subir|sobe|subiu|cair|caiu|queda|alta|romp\w*|cruz\w*|acima|abaixo|rebote|engolf\w*|break(?:out)?s?|cross(?:es|ed|ing)?|pump|dump|spike|retest\w*|revers\w*|momentum|tend[eê]ncia)\b/i.test(t)) return true;
+  if (/\b(?:m[aá]xim[ao]s?|m[ií]nim[ao]s?|suporte|resist[eê]ncia|pre[cç]os?|prices?|n[ií]veis|topo|fundo|highs?|lows?|support|resistance)\b/i.test(t)) return true;
+  return false;
+}
+
+/** Create sem gatilho (comprimento já passou). null se o texto serve. */
+function missingTrigger(text, locale = 'pt-BR') {
+  const trimmed = String(text || '').trim();
+  if (trimmed.length < 8 || hasMarketTrigger(trimmed)) return null;
+  return { failed: true, error: pickMsg(SHORT_TRIGGER_MSG, locale) };
 }
 
 function pickMsg(body, locale) {
@@ -101,13 +134,7 @@ function infeasiblePrompt(text, locale = 'pt-BR') {
   const msg = (body) => pickMsg(body, locale);
   const trimmed = raw.trim();
   if (trimmed.length > 0 && trimmed.length < 8) {
-    return {
-      failed: true,
-      error: msg({
-        pt: 'Descreve o gatilho em uma frase: o movimento, a janela, e se quiser o stop e o alvo.',
-        en: 'Describe the trigger in one sentence: the move, the timeframe, and optionally stop and target.',
-      }),
-    };
+    return { failed: true, error: msg(SHORT_TRIGGER_MSG) };
   }
 
   if (asksUnmeasuredMarket(raw)) {
@@ -157,6 +184,9 @@ function infeasiblePrompt(text, locale = 'pt-BR') {
       }),
     };
   }
+
+  const thin = missingTrigger(raw, locale);
+  if (thin) return thin;
 
   return null;
 }
@@ -374,6 +404,8 @@ function executableFailure(code, thesis = '', locale = 'pt-BR') {
 module.exports = {
   CTX_MEMBERS,
   infeasiblePrompt,
+  hasMarketTrigger,
+  missingTrigger,
   nonExecutableJs,
   unknownCtxMembers,
   scrubCtxJargon,

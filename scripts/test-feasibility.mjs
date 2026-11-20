@@ -7,6 +7,15 @@ assert(infeasiblePrompt('comprar quando a lua estiver cheia', 'pt-BR')?.failed);
 assert(infeasiblePrompt('spread ETH/BTC igual a pi exato', 'pt-BR')?.failed);
 assert(!infeasiblePrompt('comprar no rompimento 15m', 'pt-BR'));
 assert(infeasiblePrompt('oi', 'pt-BR')?.failed);
+const compraJa = infeasiblePrompt('compra ja', 'pt-BR');
+assert(compraJa?.failed, 'compra ja não tem gatilho');
+assert(compraJa.error === infeasiblePrompt('oi', 'pt-BR').error);
+assert(!infeasiblePrompt('comprar quando subir 1% em 5m', 'pt-BR'));
+assert(infeasiblePrompt('buy now', 'en')?.failed);
+const scratchSafe = `Crie uma estratégia de compra spot para o simulador SpotStrat.
+Perfil seguro: só comprar com confirmação de fluxo (livro e tape) e priorizar acerto sobre frequência.
+Saída: Stop 0.6% e alvo 1% a partir da entrada.`;
+assert(!infeasiblePrompt(scratchSafe, 'pt-BR'));
 
 const liqPrompt = 'Comprar BTC spot quando houver uma liquidação grande de shorts no Binance Futures e o funding estiver negativo.';
 const liq = infeasiblePrompt(liqPrompt, 'pt-BR');

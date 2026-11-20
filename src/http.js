@@ -13,6 +13,7 @@ const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
 const { notifyOwner, sendVerifyCode, sendResetCode } = require('./mail');
 const { suggestGuide } = require('./llm');
+const { missingTrigger } = require('./feasibility');
 const { mountAdmin } = require('./admin');
 const stripeBilling = require('./stripeBilling');
 
@@ -1289,6 +1290,16 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
       httpStatus: 400, errorStage: 'http',
     });
     return { status: 400, error: { error: 'invalid_body', message: shortMsg } };
+  }
+  if (!strategyId) {
+    const thin = missingTrigger(prompt, req.profile?.locale || 'pt-BR');
+    if (thin) {
+      await savePrompt(req, {
+        prompt, mode, status: 'rejected', detail: thin.error, threadId, strategyId,
+        httpStatus: 400, errorStage: 'http',
+      });
+      return { status: 400, error: { error: 'invalid_body', message: thin.error } };
+    }
   }
   if (!allow(`prompt-h:${req.user.id}`, 60, 3600_000)) {
     await savePrompt(req, {
