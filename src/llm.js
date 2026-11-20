@@ -1,7 +1,9 @@
 const { validateRecipe, netRR, MIN_NET_RR, OPS } = require('./shared');
 const { CATALOG, fromModel, RESPONSE_SCHEMA, systemPrompt } = require('./llmSchema');
 const { refusesSwap } = require('./interpret');
-const { infeasiblePrompt, EXPLANATION_FIELDS, explanationCorrectionOk, prepareReaderCopy } = require('./feasibility');
+const {
+  infeasiblePrompt, exitIsIndicatorOnly, EXPLANATION_FIELDS, explanationCorrectionOk, prepareReaderCopy,
+} = require('./feasibility');
 const { recipeFromModel } = require('./script');
 const { buildJsRecipe } = require('./sandbox');
 
@@ -235,14 +237,20 @@ function unaskedEma(text, recipe) {
   return !/ema|m[eé]dia m[oó]vel/i.test(text);
 }
 
-function optionNote(options) {
+function optionNote(options, userText = '') {
   if (!options) return '';
   const lines = [];
   const stop = Number(options.stopPct);
   const target = Number(options.tpPct);
   const hold = Number(options.maxHoldMin);
+  const indicatorOnly = options.exit === 'indicator' || exitIsIndicatorOnly(userText);
   // After history fit, % are measured — never tell the model the person typed them.
-  if (options.historyApplied && stop > 0 && target > 0) {
+  if (indicatorOnly) {
+    lines.push(
+      'A intenção final substitui os percentuais citados antes: a saída é somente pelo indicador descrito. '
+      + 'No buy, não grave stop nem target fixos. Na posição, devolva sell quando o indicador atingir a condição pedida.',
+    );
+  } else if (options.historyApplied && stop > 0 && target > 0) {
     lines.push(
       `Stop ${stop}% e alvo ${target}% VIERAM DA BUSCA HISTÓRICA nas velas de 18 meses — a pessoa NÃO digitou esses percentuais. `
       + 'O código usa exatamente esses %. No thesis/exit/risks diga que vieram da busca nas velas. '
@@ -282,7 +290,7 @@ function settle(data, { messages, locale, current, mode, options }) {
   const users = (messages || []).filter((m) => m.role === 'user');
   const last = users[users.length - 1];
   const lastText = (last && last.content) || '';
-  const chosen = optionNote(options);
+  const chosen = optionNote(options, users.map((m) => m.content).join('\n'));
   const blob = users.map((m) => m.content).join('\n') + (chosen ? `\n${chosen}` : '');
   const known = triggerAlreadyKnown(messages, options);
   if (!data) {
@@ -481,7 +489,7 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
       ? 'O brief já traz gatilho, saída e números. Não peça o gatilho de novo: devolva code com function strategy(ctx), ask e questions vazios.'
       : '',
     'Se o usuário negar stop/alvo fixos e pedir saída só por indicador (ex.: RSI), NÃO escreva “como você pediu” para esses %; priorize a saída que ele pediu no final.',
-    optionNote(options),
+    optionNote(options, userBlob(messages)),
     exitHint || '',
     mode === 'alarm' ? ALARM_NOTE : '',
   ].filter(Boolean).join('\n');

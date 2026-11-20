@@ -2,6 +2,7 @@ import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scru
 import { parseLocaleNumber } from '../src/shared.js';
 import { interpret } from '../src/interpret.js';
 import { makeCtx, buildJsRecipe, syncExitFromCode } from '../src/sandbox.js';
+import { cleanOptions } from '../src/http.js';
 import assert from 'assert';
 
 assert(infeasiblePrompt('comprar quando a lua estiver cheia', 'pt-BR')?.failed);
@@ -145,6 +146,39 @@ assert(!/conversa/i.test(JSON.stringify(safeBuilt.recipe.explanation)));
 
 const contradiction = 'QA20 Rompimento de 15m. Eu escrevi stop 0,5% e alvo 20%, mas na verdade quero sair só quando o RSI passar de 80, sem stop percentual.';
 assert(exitIsIndicatorOnly(contradiction), 'contradição final pede saída só por RSI');
+const contradictionOptions = cleanOptions({
+  guided: false,
+  exit: 'history',
+  wallet: 1000,
+  autoFill: true,
+}, contradiction, 'pt-BR');
+assert.strictEqual(contradictionOptions.exit, 'indicator');
+assert.strictEqual(contradictionOptions.stopPct, null);
+assert.strictEqual(contradictionOptions.tpPct, null);
+const contradictionBuilt = buildJsRecipe({
+  name: 'Rompimento com saída RSI',
+  thesis: 'Compra no rompimento. Stop 0,5% e alvo 20% conforme os números citados antes.',
+  entryText: 'Compra quando a vela de 15m rompe a máxima anterior.',
+  exitText: 'Vende quando o RSI passar de 80; não usa stop percentual.',
+  risks: 'O alvo de 20% pode demorar.',
+  code: `function strategy(ctx) {
+    const c = ctx.candles("15m");
+    if (c.length < 16) return { action: "hold" };
+    const value = Number(ctx.rsi(c.close, 15));
+    if (ctx.position) return value >= 80 ? { action: "sell" } : { action: "hold" };
+    const last = c[c.length - 1];
+    const prev = c[c.length - 2];
+    if (last.close <= prev.high) return { action: "hold" };
+    return { action: "buy", stop: ctx.price * (1 - 0.5 / 100), target: ctx.price * (1 + 20 / 100) };
+  }`,
+}, contradiction, 'pt-BR', contradictionOptions);
+assert(contradictionBuilt.recipe && !contradictionBuilt.ask && !contradictionBuilt.failed, JSON.stringify(contradictionBuilt));
+assert(/stop:\s*null/i.test(contradictionBuilt.recipe.code));
+assert(/target:\s*null/i.test(contradictionBuilt.recipe.code));
+assert.strictEqual(contradictionBuilt.recipe.exit.stopPct, null);
+assert.strictEqual(contradictionBuilt.recipe.exit.tpPct, null);
+assert(contradictionBuilt.recipe.plan.indicatorExit && contradictionBuilt.recipe.plan.noStop && contradictionBuilt.recipe.plan.noTarget);
+assert(!/stop\s+0[,.]5\s*%|alvo\s+20\s*%/i.test(JSON.stringify(contradictionBuilt.recipe.explanation)));
 
 const bookOnlyText = `Brief.
 Entrada: Comprar quando o livro mostrar pressão compradora clara perto do preço, sem olhar médias.

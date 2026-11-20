@@ -134,11 +134,14 @@ function validateRecipe(recipe) {
   }
   const exit = recipe.exit || {};
   const plan = recipe.plan || {};
-  const relaxed = plan.kind === 'grid' || plan.kind === 'dca' || plan.kind === 'accum' || plan.trail || plan.noTarget || plan.exact;
+  const noFixedStop = !!plan.noStop;
+  const noFixedTarget = !!plan.noTarget;
+  const relaxed = plan.kind === 'grid' || plan.kind === 'dca' || plan.kind === 'accum'
+    || plan.trail || noFixedTarget || noFixedStop || plan.exact;
   const stopPct = Number(exit.stopPct);
   const tpPct = Number(exit.tpPct);
-  if (!(stopPct > 0)) errors.push('stopPct é obrigatório');
-  if (!relaxed && !(tpPct > 0)) errors.push('tpPct é obrigatório');
+  if (!noFixedStop && !(stopPct > 0)) errors.push('stopPct é obrigatório');
+  if (!noFixedTarget && !relaxed && !(tpPct > 0)) errors.push('tpPct é obrigatório');
   if (stopPct > 25) errors.push('stop acima de 25%');
   if (!relaxed) {
     const rr = netRR({ stopPct, tpPct });

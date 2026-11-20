@@ -789,8 +789,17 @@ function scrubBuyOcoForIndicatorExit(code) {
     .replace(/(\{[^}]*action\s*:\s*['"]buy['"][^}]*)\btarget\s*:\s*[^,}]+/gi, '$1target: null');
 }
 
-function chosenExitAsk(code, options) {
+function scrubFixedExitClaimsForIndicator(text) {
+  return String(text || '')
+    .replace(/[^.!?\n]*(?:\bstop\b|\balvo\b|\btarget\b|\btp\b)[^.!?\n]*\d+(?:[.,]\d+)?\s*%[^.!?\n]*[.!?]?/gi, ' ')
+    .replace(/[^.!?\n]*\d+(?:[.,]\d+)?\s*%[^.!?\n]*(?:\bstop\b|\balvo\b|\btarget\b|\btp\b)[^.!?\n]*[.!?]?/gi, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+function chosenExitAsk(code, options, userText = '') {
   if (!options) return '';
+  if (options.exit === 'indicator' || exitIsIndicatorOnly(userText)) return '';
   const stop = Number(options.stopPct);
   const target = Number(options.tpPct);
   // Always enforce explicit manual exits (including guided wizards).
@@ -935,8 +944,9 @@ function buildJsRecipe(data, userText, locale, options) {
     const filled = defaults.map((item) => `${item.label} ${item.value}`).join('; ');
     return { ask: `Use estes padrões e escreva o código: ${filled}. Declare no thesis.`, retry: true };
   }
+  const indicatorOnly = options?.exit === 'indicator' || exitIsIndicatorOnly(userText);
   let codeWorking = patchManualExitLiterals(code, options);
-  if (exitIsIndicatorOnly(userText)) {
+  if (indicatorOnly) {
     codeWorking = scrubBuyOcoForIndicatorExit(codeWorking);
   }
   const flow = ensureFlowCoverage(codeWorking, userText);
@@ -944,7 +954,7 @@ function buildJsRecipe(data, userText, locale, options) {
   if (flow.assumed.length) defaults.push(...flow.assumed);
   const numbers = checkNumbers(codeWorking, userText, defaults, locale, options);
   if (!numbers.ok) return { ask: numbers.error, retry: true };
-  const chosen = chosenExitAsk(codeWorking, options);
+  const chosen = chosenExitAsk(codeWorking, options, userText);
   if (chosen) return { ask: chosen, retry: true };
   const book = bookCoverageAsk(codeWorking, userText);
   if (book) return { ask: book, retry: true };
@@ -1012,6 +1022,14 @@ function buildJsRecipe(data, userText, locale, options) {
     risks: scrubCtxJargon(`${scrubClaim(data.risks || '')} Paper. O código rodou em candles de teste sem quebrar.`.trim()),
     paramsPlain: 'regra no simulador',
   };
+  if (indicatorOnly) {
+    text.thesis = scrubFixedExitClaimsForIndicator(text.thesis);
+    text.entry = scrubFixedExitClaimsForIndicator(text.entry);
+    text.exit = scrubFixedExitClaimsForIndicator(text.exit)
+      || 'Sai somente quando a condição de saída por indicador descrita no pedido acontecer.';
+    text.risks = scrubFixedExitClaimsForIndicator(text.risks);
+    text.paramsPlain = 'saída por indicador, sem stop ou alvo percentual fixo';
+  }
   const name = String(data.name || 'Estratégia').slice(0, 80);
   const assumptions = defaults.length
     ? defaults.map((item) => ({ label: item.label, value: String(item.value) }))
@@ -1027,8 +1045,8 @@ function buildJsRecipe(data, userText, locale, options) {
     }
   }
   const fromCode = exitPctFromCode(codeWorking);
-  const stopPct = fromCode.stopPct != null ? fromCode.stopPct : (userStop != null ? userStop : 1);
-  const tpPct = fromCode.tpPct != null ? fromCode.tpPct : (userTarget != null ? userTarget : 1);
+  const stopPct = indicatorOnly ? null : (fromCode.stopPct != null ? fromCode.stopPct : (userStop != null ? userStop : 1));
+  const tpPct = indicatorOnly ? null : (fromCode.tpPct != null ? fromCode.tpPct : (userTarget != null ? userTarget : 1));
   const recipe = {
     name,
     explanation: { [locale || 'pt-BR']: text, en: text },
@@ -1036,7 +1054,11 @@ function buildJsRecipe(data, userText, locale, options) {
     filters: [],
     exit: { stopPct, tpPct, maxHoldMin: 1440, timeExit: false },
     pacing: { noRepeatMin: 15, stopCooldownMin: 30 },
-    plan: { kind: 'js', exact: true },
+    plan: {
+      kind: 'js',
+      exact: true,
+      ...(indicatorOnly ? { indicatorExit: true, noStop: true, noTarget: true } : {}),
+    },
     defaults,
     assumptions,
     code: codeWorking,

@@ -13,7 +13,7 @@ const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
 const { notifyOwner, sendVerifyCode, sendResetCode } = require('./mail');
 const { suggestGuide } = require('./llm');
-const { missingTrigger } = require('./feasibility');
+const { missingTrigger, exitIsIndicatorOnly } = require('./feasibility');
 const { mountAdmin } = require('./admin');
 const stripeBilling = require('./stripeBilling');
 
@@ -1222,6 +1222,13 @@ function cleanOptions(raw, prompt = '', locale = 'pt-BR') {
     if (fromText.tpPct > 0) tpPct = fromText.tpPct;
     if (fromText.exit === 'manual') exit = 'manual';
   }
+  // A intenção final explícita ("na verdade... só RSI, sem stop") vence
+  // percentuais citados antes no mesmo texto.
+  if (exitIsIndicatorOnly(prompt)) {
+    exit = 'indicator';
+    stopPct = null;
+    tpPct = null;
+  }
   const time = raw.time === 'manual' ? 'manual' : 'history';
   return {
     exit,
@@ -1381,4 +1388,4 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
   return { jobId: job.rows[0].id, status: job.rows[0].status, threadId: thread };
 }
 
-module.exports = { createHttp };
+module.exports = { createHttp, cleanOptions };
