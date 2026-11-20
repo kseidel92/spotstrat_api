@@ -805,6 +805,7 @@ function createDesk(hub) {
         halted: run.snap.halted,
         position: publicPosition(run.snap),
         startedAt: run.snap.startedAt,
+        createdAt: run.strategy.created_at,
       });
     }
     const user = users.get(userId);
