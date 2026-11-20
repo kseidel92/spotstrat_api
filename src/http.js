@@ -174,16 +174,17 @@ function createHttp(desk) {
   }
 
   function requireDesk(req, res, next) {
-    // TRAVA DE ACESSO COMENTADA — o desk abre sem e-mail confirmado e com o período vencido.
-    // if (req.profile.desk === 'unverified') {
-    //   return res.status(403).json({ error: 'unverified', message: 'Confirme o e-mail para entrar no desk.' });
-    // }
-    // if (!deskAllowed(req.profile)) {
-    //   return res.status(402).json({
-    //     error: 'trial_expired',
-    //     message: 'O acesso terminou. Escolha paper ou pro para continuar.',
-    //   });
-    // }
+    // Leitura segue aberta. Criar, editar e simular exigem e-mail confirmado e acesso vigente.
+    if (req.method === 'GET' || req.method === 'HEAD') return next();
+    if (req.profile.desk === 'unverified') {
+      return res.status(403).json({ error: 'unverified', message: 'Confirme o e-mail para entrar no desk.' });
+    }
+    if (!deskAllowed(req.profile)) {
+      return res.status(402).json({
+        error: 'trial_expired',
+        message: 'O acesso terminou. Escolha paper ou pro para continuar.',
+      });
+    }
     return next();
   }
 
