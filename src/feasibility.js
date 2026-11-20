@@ -401,6 +401,54 @@ function executableFailure(code, thesis = '', locale = 'pt-BR') {
   return { failed: true, error: pickMsg(body, locale) };
 }
 
+/** Tira stop/alvo de paper e “busca nas velas” do texto de um alarme. */
+function scrubAlarmExplanation(explanation) {
+  const scrub = (text) => String(text || '')
+    .replace(/[^.!?\n]*busca nas velas[^.!?\n]*[.!?]?/gi, ' ')
+    .replace(/[^.!?\n]*\bstop\b[^.!?\n]{0,48}\d+(?:[.,]\d+)?\s*%[^.!?\n]*[.!?]?/gi, ' ')
+    .replace(/[^.!?\n]*\balvo\b[^.!?\n]{0,48}\d+(?:[.,]\d+)?\s*%[^.!?\n]*[.!?]?/gi, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\s+([.!?])/g, '$1')
+    .trim();
+  const next = {};
+  for (const [key, block] of Object.entries(explanation || {})) {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) {
+      next[key] = block;
+      continue;
+    }
+    next[key] = {
+      ...block,
+      thesis: scrub(block.thesis),
+      entry: scrub(block.entry),
+      exit: scrub(block.exit),
+      risks: scrub(block.risks),
+    };
+  }
+  return next;
+}
+
+/** Corrige repetição imediata de sílaba (sobobre → sobre). Não mexe em código. */
+function polishExplanation(text) {
+  return String(text || '').replace(/\p{L}{5,}/gu, (word) => word.replace(/(\p{L}{2,3})\1/gu, '$1'));
+}
+
+function polishRecipeText(recipe) {
+  if (!recipe || !recipe.explanation) return recipe;
+  const explanation = {};
+  for (const [key, block] of Object.entries(recipe.explanation)) {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) {
+      explanation[key] = block;
+      continue;
+    }
+    explanation[key] = { ...block };
+    for (const field of ['thesis', 'entry', 'exit', 'filters', 'risks', 'paramsPlain']) {
+      if (typeof block[field] === 'string') explanation[key][field] = polishExplanation(block[field]);
+    }
+  }
+  recipe.explanation = explanation;
+  return recipe;
+}
+
 module.exports = {
   CTX_MEMBERS,
   infeasiblePrompt,
@@ -414,4 +462,7 @@ module.exports = {
   executableFailure,
   userRejectedFixedExit,
   exitIsIndicatorOnly,
+  scrubAlarmExplanation,
+  polishExplanation,
+  polishRecipeText,
 };
