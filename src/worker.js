@@ -2,7 +2,7 @@ const { pool } = require('./db');
 const { completeRecipe } = require('./llm');
 const { id, emptySnap, walletOf, netRR, MIN_NET_RR, validateRecipe, alarmSoundKind } = require('./shared');
 const { writeStrategyFile, syncExitFromCode } = require('./sandbox');
-const { executableFailure } = require('./feasibility');
+const { executableFailure, gridFailure } = require('./feasibility');
 const lab = require('./lab');
 const bus = require('./bus');
 
@@ -502,6 +502,21 @@ async function runJob(job) {
   }
   const recipe = shaped.recipe;
   syncExitFromCode(recipe);
+  const asked = messages.map((m) => m.content).join('\n');
+  const blockedGrid = gridFailure(asked, recipe && recipe.code, input.locale || 'pt-BR');
+  if (blockedGrid) {
+    const human = blockedGrid.error;
+    await say(job.thread_id, human, null).catch(() => {});
+    await finish(job, {
+      status: 'failed',
+      error: human,
+      output: { provider: result.provider },
+      detail: human,
+      errorStage: 'feasibility',
+      httpStatus: 200,
+    });
+    return;
+  }
   if (recipe && recipe.code) {
     const blockedCode = executableFailure(recipe.code, '', input.locale || 'pt-BR');
     if (blockedCode) {

@@ -3,7 +3,7 @@ const path = require('path');
 const vm = require('vm');
 const { validateRecipe, promptNumbers, brtDay, localeFamily } = require('./shared');
 const { bars } = require('./faithful');
-const { executableFailure, scrubCtxJargon, userRejectedFixedExit, exitIsIndicatorOnly } = require('./feasibility');
+const { executableFailure, gridFailure, scrubCtxJargon, userRejectedFixedExit, exitIsIndicatorOnly } = require('./feasibility');
 
 const DIR = path.join(__dirname, '../data/strategies');
 const MARK = '\n// --- strategy ---\n';
@@ -830,6 +830,8 @@ function autoFillRetryAsk(question, userText) {
 }
 
 function buildJsRecipe(data, userText, locale, options) {
+  const gridBlock = gridFailure(userText, data && data.code, locale);
+  if (gridBlock) return gridBlock;
   const ask = String(data.ask || '').trim();
   const questions = questionsOf(data);
   const defaults = defaultsOf(data.defaults);

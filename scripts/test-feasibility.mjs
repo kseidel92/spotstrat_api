@@ -16,6 +16,12 @@ assert(!/ctx\./.test(liq.error), liq.error);
 assert(infeasiblePrompt('Buy when funding rate is negative', 'en')?.failed);
 assert(!infeasiblePrompt('comprar quando subir 1% em 5 minutos', 'pt-BR'));
 
+const gridPrompt = 'Monte um grid de 12 pernas comprando e vendendo BTC a cada 0,4% entre 60000 e 70000.';
+const grid = infeasiblePrompt(gridPrompt, 'pt-BR');
+assert(grid?.failed, 'grid de várias pernas deve falhar');
+assert(/uma posi[cç][aã]o/i.test(grid.error) && /n[aã]o suport/i.test(grid.error), grid.error);
+assert(!infeasiblePrompt('comprar no rompimento das últimas 8 velas de 15m', 'pt-BR'));
+
 const p = `No 1h, compra se o candle fechar acima da máxima das 20 velas anteriores e o volume for 1,5x a média`;
 assert(interpret(p)?.plan?.kind === 'donchian', 'donchian matcher');
 
@@ -77,6 +83,17 @@ const refused = buildJsRecipe({
 }, liqPrompt, 'pt-BR', { autoFill: true });
 assert(refused.failed && !refused.recipe, JSON.stringify(refused));
 assert(!/ctx\./.test(refused.error));
+
+const fakeGrid = buildJsRecipe({
+  name: 'Grid 12 pernas',
+  thesis: 'Grade de 12 pernas entre 60000 e 70000.',
+  code: `function strategy(ctx) {
+    if (ctx.position) return { action: "hold" };
+    return { action: "buy", stop: ctx.price * 0.988, target: ctx.price * 1.018 };
+  }`,
+}, gridPrompt, 'pt-BR', { autoFill: true });
+assert(fakeGrid.failed && !fakeGrid.recipe, JSON.stringify(fakeGrid));
+assert(/uma posi/i.test(fakeGrid.error));
 
 const kept = buildJsRecipe({
   name: 'Rompimento',

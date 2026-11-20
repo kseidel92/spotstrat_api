@@ -52,6 +52,11 @@ const UNKNOWN_CTX_MSG = {
   en: 'We cannot create this strategy: the simulator does not measure that data as a trigger. Describe the trigger using price, volume, candles, averages, book or tape for your pair.',
 };
 
+const GRID_MSG = {
+  pt: 'Não dá para criar essa estratégia: o paper opera uma posição por vez e não suporta grid de várias pernas. Dá para aproximar com uma compra e uma venda se você descrever o gatilho com preço, velas ou livro.',
+  en: 'We cannot create this strategy: paper trading holds one position at a time and does not support a multi-leg grid. You can approximate it with one buy and one sell if you describe the trigger using price, candles or the book.',
+};
+
 const DEAD_CODE_MSG = {
   pt: 'Não dá para criar essa estratégia: o pedido usa sinais que o simulador não mede (ex.: lua, spread exato ou dados fora do par). Reformule com velas, volume, médias, livro ou tape.',
   en: 'We cannot create this strategy: the request uses signals the simulator cannot measure. Rephrase using candles, volume, averages, book or tape.',
@@ -70,6 +75,19 @@ function asksUnmeasuredMarket(text) {
   const t = String(text || '');
   if (/liquida[cç][aã]o|liquida[cç][oõ]es|\bliquidations?\b/i.test(t)) return true;
   if (/\bfunding(\s+rate)?\b|\btaxa\s+de\s+funding\b/i.test(t)) return true;
+  return false;
+}
+
+/**
+ * Grid / martingale / várias pernas. O paper JS guarda uma posição;
+ * o runtime de grade (plan.kind grid) não é o que o gerador entrega.
+ */
+function asksUnsupportedGrid(text) {
+  const t = String(text || '');
+  if (/\b(grids?|martingales?|martingal)\b/i.test(t)) return true;
+  if (/\b\d+\s*pernas?\b/i.test(t)) return true;
+  if (/\bv[aá]rias\s+pernas\b|\bmulti[- ]?pernas?\b/i.test(t)) return true;
+  if (/\bgrade\b/i.test(t) && /\b(pernas?|n[ií]veis|compr\w*\s+e\s+vend\w*)\b/i.test(t)) return true;
   return false;
 }
 
@@ -94,6 +112,10 @@ function infeasiblePrompt(text, locale = 'pt-BR') {
 
   if (asksUnmeasuredMarket(raw)) {
     return { failed: true, error: msg(LIQUIDATION_MSG) };
+  }
+
+  if (asksUnsupportedGrid(raw)) {
+    return { failed: true, error: msg(GRID_MSG) };
   }
 
   if (/\blua\b/.test(t) && /(cheia|nova|minguante|quarto crescente)/.test(t)) {
@@ -329,6 +351,14 @@ function exitIsIndicatorOnly(text) {
     && !/\bsa[ií]da\b[^\n]{0,60}\b(?:stop|alvo)\b[^\n]{0,20}\d+(?:[.,]\d+)?\s*%/i.test(t);
 }
 
+/** Recusa quando o pedido pede grade e o código não é um plan.kind grid de verdade. */
+function gridFailure(userText, code, locale = 'pt-BR') {
+  if (!asksUnsupportedGrid(userText)) return null;
+  const src = String(code || '');
+  if (src && !/function\s+strategy/.test(src)) return null;
+  return { failed: true, error: pickMsg(GRID_MSG, locale) };
+}
+
 /** Recusa de código que não pode ser persistido. null se o JS é executável. */
 function executableFailure(code, thesis = '', locale = 'pt-BR') {
   const reason = nonExecutableJs(code, thesis);
@@ -347,6 +377,8 @@ module.exports = {
   nonExecutableJs,
   unknownCtxMembers,
   scrubCtxJargon,
+  asksUnsupportedGrid,
+  gridFailure,
   executableFailure,
   userRejectedFixedExit,
   exitIsIndicatorOnly,
