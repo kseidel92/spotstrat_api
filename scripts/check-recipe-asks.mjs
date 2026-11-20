@@ -95,6 +95,8 @@ const gBreakText = suggestGuide({ entry: breakoutText }, 'exit');
 assert(gBreakText.kind === 'breakout' && gBreakText.stop === '1.2', JSON.stringify(gBreakText));
 const gCross = suggestGuide({ entry: crossText }, 'exit');
 assert(gCross.kind === 'cross' && gCross.stop === '0.8' && gCross.target === '1.6', JSON.stringify(gCross));
+const gVwap = suggestGuide({ entry: 'Comprar no terceiro toque do VWAP de 4h.' }, 'exit');
+assert(gVwap.kind === 'indicators', JSON.stringify(gVwap));
 const gMare = suggestGuide({ entry: 'Só operar quando a maré estiver boa.' }, 'exit');
 assert(gMare.kind === 'pressure' && gMare.stop === '0.9', JSON.stringify(gMare));
 

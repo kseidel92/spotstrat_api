@@ -674,7 +674,7 @@ function guideKindOf(guide) {
   if (/recuper|caiu com for[cç]a|revers[aã]o|candle de for[cç]a/.test(t)) return 'recovery';
   if (/romp|breakout/.test(t)) return 'breakout';
   if (/cruzamento|cruzar|cruza|\bcross\b/.test(t)) return 'cross';
-  if (/indicador|\brsi\b|\bmacd\b|\bema\b|\bsma\b|m[eé]dias?/.test(t)) return 'indicators';
+  if (/indicador|\brsi\b|\bmacd\b|\bema\b|\bsma\b|\bvwap\b|m[eé]dias?/.test(t)) return 'indicators';
   const known = detectKind(text);
   if (known === 'laggard' && /mar[eé](?:\s+\S+){0,3}\s+boa/.test(t)) return 'pressure';
   if (known === 'range' && /romp|breakout/.test(t)) return 'breakout';
