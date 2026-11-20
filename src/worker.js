@@ -1,8 +1,8 @@
 const { pool } = require('./db');
-const { completeRecipe } = require('./llm');
+const { completeRecipe, correctExplanation } = require('./llm');
 const { id, emptySnap, walletOf, netRR, MIN_NET_RR, validateRecipe, alarmSoundKind } = require('./shared');
 const { writeStrategyFile, syncExitFromCode } = require('./sandbox');
-const { executableFailure, gridFailure, exitIsIndicatorOnly, scrubAlarmExplanation, polishRecipeText } = require('./feasibility');
+const { executableFailure, gridFailure, exitIsIndicatorOnly, scrubAlarmExplanation } = require('./feasibility');
 const lab = require('./lab');
 const bus = require('./bus');
 
@@ -220,7 +220,6 @@ function variantRecipes(recipe, picked = 'any') {
 
 async function saveRecipe(job, recipe, extra = {}) {
   syncExitFromCode(recipe);
-  polishRecipeText(recipe);
   const input = job.input || {};
   const mareMode = extra.mareMode || (input.strategyId && !extra.forceNew ? null : 'any');
   let strategyId = extra.forceNew ? null : (input.strategyId || null);
@@ -538,6 +537,8 @@ async function runJob(job) {
     }
   }
   if (input.mode === 'alarm' && !input.strategyId) {
+    recipe.explanation = scrubAlarmExplanation(recipe.explanation);
+    await correctExplanation(recipe, input.locale || 'pt-BR');
     const alarmId = await saveAlarm(job, recipe);
     await finish(job, {
       status: 'done',
@@ -548,6 +549,7 @@ async function runJob(job) {
     if (desk) await desk.reloadUser(job.user_id);
     return;
   }
+  await correctExplanation(recipe, input.locale || 'pt-BR');
   const makeVariants = !!(input.options && input.options.variants) && !input.strategyId;
   const chosen = ['any', 'good', 'not_bad'].includes(input.options?.mareMode) ? input.options.mareMode : null;
   const list = makeVariants ? variantRecipes(recipe, chosen || 'any') : [{ recipe, mareMode: chosen }];
@@ -588,8 +590,6 @@ function channelsOf(raw) {
 async function saveAlarm(job, recipe) {
   const alarmId = id('a');
   const locale = (job.input || {}).locale || 'pt-BR';
-  recipe.explanation = scrubAlarmExplanation(recipe.explanation);
-  polishRecipeText(recipe);
   const text = recipe.explanation?.[locale] || recipe.explanation?.en || recipe.explanation?.['pt-BR'];
   const channels = channelsOf((job.input || {}).options?.channels);
   await pool.query(

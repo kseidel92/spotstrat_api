@@ -1,7 +1,7 @@
 const { validateRecipe, netRR, MIN_NET_RR, OPS } = require('./shared');
 const { CATALOG, fromModel, RESPONSE_SCHEMA, systemPrompt } = require('./llmSchema');
 const { refusesSwap } = require('./interpret');
-const { infeasiblePrompt } = require('./feasibility');
+const { infeasiblePrompt, EXPLANATION_FIELDS, explanationCorrectionOk } = require('./feasibility');
 const { recipeFromModel } = require('./script');
 const { buildJsRecipe } = require('./sandbox');
 
@@ -629,6 +629,119 @@ async function callAnthropicText({ system, messages }) {
   return (body.content || []).map((c) => c.text || '').join('').trim();
 }
 
+function spellLanguage(locale) {
+  if (/^pt/i.test(locale || '')) return 'português do Brasil';
+  if (/^es/i.test(locale || '')) return 'español';
+  if (/^fr/i.test(locale || '')) return 'français';
+  if (/^de/i.test(locale || '')) return 'Deutsch';
+  if (/^ja/i.test(locale || '')) return '日本語';
+  return 'English';
+}
+
+function spellSystem(locale) {
+  return [
+    `Corrija só ortografia e acentuação em ${spellLanguage(locale)}.`,
+    'Não mude números, porcentagens, siglas, tickers nem o sentido das frases.',
+    'Não escreva código e não mencione ctx.',
+    'Responda somente um JSON com as chaves thesis, entry, exit, filters, risks, paramsPlain.',
+    'Se um campo vier vazio, devolva esse campo vazio.',
+  ].join('\n');
+}
+
+async function callSpell({ provider, system, user, signal }) {
+  if (provider === 'openai') {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      signal,
+      headers: {
+        Authorization: `Bearer ${secret('OPENAI_API_KEY')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0,
+        max_tokens: 1200,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error?.message || `OpenAI HTTP ${res.status}`);
+    return String(body.choices?.[0]?.message?.content || '');
+  }
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    signal,
+    headers: {
+      'x-api-key': secret('ANTHROPIC_API_KEY'),
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5',
+      max_tokens: 1200,
+      system,
+      messages: [{ role: 'user', content: user }],
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error?.message || `Anthropic HTTP ${res.status}`);
+  return (body.content || []).map((part) => part.text || '').join('');
+}
+
+async function correctSpellingBlock(source, locale) {
+  const openai = secret('OPENAI_API_KEY');
+  const anthropic = secret('ANTHROPIC_API_KEY');
+  const order = [openai ? 'openai' : '', anthropic ? 'anthropic' : ''].filter(Boolean);
+  if (!order.length) return source;
+  const system = spellSystem(locale);
+  const user = JSON.stringify(source);
+  for (const provider of order) {
+    try {
+      const text = await callSpell({
+        provider,
+        system,
+        user,
+        signal: AbortSignal.timeout(12000),
+      });
+      const data = parseModelJson(text);
+      const next = { ...source };
+      for (const field of EXPLANATION_FIELDS) {
+        if (data[field] == null) continue;
+        const candidate = String(data[field]).trim();
+        if (explanationCorrectionOk(source[field], candidate)) next[field] = candidate;
+      }
+      return next;
+    } catch (err) {
+      console.error('[llm] ortografia', err.message);
+    }
+  }
+  return source;
+}
+
+/** Segunda chamada: só ortografia do texto, com o código já fechado. */
+async function correctExplanation(recipe, locale = 'pt-BR') {
+  if (!recipe || !recipe.explanation || typeof recipe.explanation !== 'object') return recipe;
+  const code = recipe.code;
+  const cache = new Map();
+  for (const [key, block] of Object.entries(recipe.explanation)) {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) continue;
+    const source = {};
+    for (const field of EXPLANATION_FIELDS) source[field] = String(block[field] || '');
+    if (!EXPLANATION_FIELDS.some((field) => source[field].trim())) continue;
+    const id = JSON.stringify(source);
+    if (!cache.has(id)) cache.set(id, await correctSpellingBlock(source, locale));
+    const fixed = cache.get(id);
+    const next = { ...block };
+    for (const field of EXPLANATION_FIELDS) next[field] = fixed[field] == null ? source[field] : fixed[field];
+    recipe.explanation[key] = next;
+  }
+  recipe.code = code;
+  return recipe;
+}
+
 async function completeLabChat({ messages, locale, labContext }) {
   const system = labSystemPrompt(locale, labContext);
   const trimmed = messages.slice(-16);
@@ -738,7 +851,7 @@ function suggestGuide(guide, step) {
 }
 
 module.exports = {
-  completeRecipe, completeLabChat, mockComplete, settle, parseModelJson, isInternalAsk,
+  completeRecipe, correctExplanation, completeLabChat, mockComplete, settle, parseModelJson, isInternalAsk,
   triggerAlreadyKnown, isVagueTriggerAsk, confirmingText, needsProviderCall,
   CATALOG, detectKind, baseRecipe, suggestGuide,
 };

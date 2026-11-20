@@ -427,26 +427,32 @@ function scrubAlarmExplanation(explanation) {
   return next;
 }
 
-/** Ticket 11: corrige repetição imediata de sílaba (sobobre → sobre). Não mexe em código. */
-function polishExplanation(text) {
-  return String(text || '').replace(/\p{L}{5,}/gu, (word) => word.replace(/(\p{L}{2,3})\1/gu, '$1'));
+const EXPLANATION_FIELDS = ['thesis', 'entry', 'exit', 'filters', 'risks', 'paramsPlain'];
+
+function explanationMarks(text) {
+  const src = String(text || '');
+  const numbers = [...src.matchAll(/\d+(?:[.,]\d+)?/g)].map((match) => match[0].replace(',', '.'));
+  const symbols = [
+    ...src.matchAll(/\b[A-Z]{2,12}USDT\b/g),
+    ...src.matchAll(/\b(?:BTC|ETH|SOL|BNB|XRP|RSI|MACD|VWAP|EMA|SMA|ATR)\b/gi),
+  ].map((match) => match[0].toUpperCase());
+  numbers.sort();
+  symbols.sort();
+  return { numbers, symbols };
 }
 
-function polishRecipeText(recipe) {
-  if (!recipe || !recipe.explanation) return recipe;
-  const explanation = {};
-  for (const [key, block] of Object.entries(recipe.explanation)) {
-    if (!block || typeof block !== 'object' || Array.isArray(block)) {
-      explanation[key] = block;
-      continue;
-    }
-    explanation[key] = { ...block };
-    for (const field of ['thesis', 'entry', 'exit', 'filters', 'risks', 'paramsPlain']) {
-      if (typeof block[field] === 'string') explanation[key][field] = polishExplanation(block[field]);
-    }
-  }
-  recipe.explanation = explanation;
-  return recipe;
+/** A correção ortográfica só entra se não mudar número, sigla nem o tamanho da frase. */
+function explanationCorrectionOk(before, after) {
+  const prev = String(before || '').trim();
+  const next = String(after || '').trim();
+  if (!next) return !prev;
+  if (/function\s+strategy|\bctx\s*\./i.test(next)) return false;
+  const from = explanationMarks(prev);
+  const to = explanationMarks(next);
+  if (from.numbers.join('|') !== to.numbers.join('|')) return false;
+  if (from.symbols.join('|') !== to.symbols.join('|')) return false;
+  if (prev && (next.length < prev.length * 0.6 || next.length > prev.length * 1.45)) return false;
+  return true;
 }
 
 module.exports = {
@@ -462,7 +468,7 @@ module.exports = {
   executableFailure,
   userRejectedFixedExit,
   exitIsIndicatorOnly,
+  EXPLANATION_FIELDS,
   scrubAlarmExplanation,
-  polishExplanation,
-  polishRecipeText,
+  explanationCorrectionOk,
 };

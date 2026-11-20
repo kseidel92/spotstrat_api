@@ -1,4 +1,4 @@
-import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scrubCtxJargon, exitIsIndicatorOnly, scrubAlarmExplanation, polishExplanation } from '../src/feasibility.js';
+import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scrubCtxJargon, exitIsIndicatorOnly, scrubAlarmExplanation, explanationCorrectionOk } from '../src/feasibility.js';
 import { parseLocaleNumber } from '../src/shared.js';
 import { interpret } from '../src/interpret.js';
 import { makeCtx, buildJsRecipe, syncExitFromCode } from '../src/sandbox.js';
@@ -200,7 +200,13 @@ const alarmText = scrubAlarmExplanation({
 });
 assert(!/busca nas velas|stop\s+1/i.test(alarmText['pt-BR'].thesis));
 assert(/3%/.test(alarmText['pt-BR'].thesis));
-assert.strictEqual(polishExplanation('Compra sobobre o rompimento com RSI.'), 'Compra sobre o rompimento com RSI.');
-assert(/1,5%/.test(polishExplanation('Stop 1,5% e alvo 3%.')));
+const spelled = 'Compra sobre o rompimento de 15m no BTC com RSI. Stop 1,5% e alvo 3%.';
+const typo = 'Compra sobobre o rompimento de 15m no BTC com RSI. Stop 1,5% e alvo 3%.';
+assert(explanationCorrectionOk(typo, spelled));
+assert(explanationCorrectionOk(typo, 'Compra sobre o rompimento de 15m no BTC com RSI. Stop 1.5% e alvo 3%.'));
+assert(!explanationCorrectionOk(typo, 'Compra sobre o rompimento de 15m no ETH com RSI. Stop 1,5% e alvo 3%.'));
+assert(!explanationCorrectionOk(typo, 'Compra sobre o rompimento de 15m no BTC com RSI. Stop 2% e alvo 3%.'));
+assert(!explanationCorrectionOk(typo, 'Compra sobre o rompimento.'));
+assert(!explanationCorrectionOk(typo, 'function strategy(ctx) { return { action: "hold" }; }'));
 
 console.log('test-feasibility: ok');
