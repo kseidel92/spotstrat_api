@@ -1,4 +1,5 @@
-import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scrubCtxJargon, exitIsIndicatorOnly } from '../src/feasibility.js';
+import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scrubCtxJargon, exitIsIndicatorOnly, scrubAlarmExplanation, polishExplanation } from '../src/feasibility.js';
+import { parseLocaleNumber } from '../src/shared.js';
 import { interpret } from '../src/interpret.js';
 import { makeCtx, buildJsRecipe, syncExitFromCode } from '../src/sandbox.js';
 import assert from 'assert';
@@ -185,5 +186,21 @@ const noTime = syncExitFromCode({
 });
 assert.strictEqual(noTime.exit.timeExit, false);
 assert.strictEqual(noTime.exit.maxHoldMin, 1440);
+
+assert.strictEqual(parseLocaleNumber('1,5', 'pt-BR'), 1.5);
+assert.strictEqual(parseLocaleNumber('3', 'pt-BR'), 3);
+assert.strictEqual(parseLocaleNumber('1.5', 'pt-BR'), 1.5);
+assert.strictEqual(parseLocaleNumber('1.250', 'pt-BR'), 1250);
+assert.strictEqual(parseLocaleNumber('1,5,6', 'pt-BR'), null);
+assert.strictEqual(parseLocaleNumber('1.5', 'en'), 1.5);
+assert.strictEqual(parseLocaleNumber('1,250', 'en'), 1250);
+
+const alarmText = scrubAlarmExplanation({
+  'pt-BR': { thesis: 'Avisa se o BTC subir 3%. Stop 1,2% e alvo 1,8% vieram da busca nas velas.', exit: 'Stop 1,2%.' },
+});
+assert(!/busca nas velas|stop\s+1/i.test(alarmText['pt-BR'].thesis));
+assert(/3%/.test(alarmText['pt-BR'].thesis));
+assert.strictEqual(polishExplanation('Compra sobobre o rompimento com RSI.'), 'Compra sobre o rompimento com RSI.');
+assert(/1,5%/.test(polishExplanation('Stop 1,5% e alvo 3%.')));
 
 console.log('test-feasibility: ok');

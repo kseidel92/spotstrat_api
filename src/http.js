@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('./db');
 const { PRESETS, publicPreset, localizedExplanation } = require('./presets');
 const {
-  id, sha256, emptySnap, walletOf, publicUser, deskAllowed, TRIAL_HOURS, LOCALES, alarmSoundKind,
+  id, sha256, emptySnap, walletOf, parseLocaleNumber, publicUser, deskAllowed, TRIAL_HOURS, LOCALES, alarmSoundKind,
 } = require('./shared');
 const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
@@ -1201,7 +1201,7 @@ function extractPromptOptions(prompt) {
   return out;
 }
 
-function cleanOptions(raw, prompt = '') {
+function cleanOptions(raw, prompt = '', locale = 'pt-BR') {
   if (!raw || typeof raw !== 'object') {
     const fromText = extractPromptOptions(prompt);
     if (!Object.keys(fromText).length) return null;
@@ -1210,8 +1210,9 @@ function cleanOptions(raw, prompt = '') {
   const fromText = extractPromptOptions(prompt);
   const guided = !!raw.guided;
   let exit = raw.exit === 'manual' ? 'manual' : 'history';
-  let stopPct = raw.stopPct == null ? null : Number(raw.stopPct);
-  let tpPct = raw.tpPct == null ? null : Number(raw.tpPct);
+  const asNum = (value) => (value == null || value === '' ? null : parseLocaleNumber(value, locale));
+  let stopPct = asNum(raw.stopPct);
+  let tpPct = asNum(raw.tpPct);
   let mareMode = ['any', 'good', 'not_bad'].includes(raw.mareMode) ? raw.mareMode : 'any';
   // Free-text wins over defaults when the wizard did not lock values (unguided prompt).
   if (!guided) {
@@ -1227,11 +1228,11 @@ function cleanOptions(raw, prompt = '') {
     tpPct,
     timeExit: !!raw.timeExit,
     time,
-    maxHoldMin: raw.maxHoldMin == null ? null : Number(raw.maxHoldMin),
+    maxHoldMin: asNum(raw.maxHoldMin),
     variants: !!raw.variants,
     mareMode,
     channels: cleanChannels(raw.channels || {}),
-    wallet: raw.wallet == null || raw.wallet === '' ? 1000 : walletOf(raw.wallet),
+    wallet: raw.wallet == null || raw.wallet === '' ? 1000 : walletOf(raw.wallet, locale),
     guided,
     autoFill: raw.autoFill !== false,
   };
@@ -1318,7 +1319,7 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
       return { status: 400, error: { error: 'invalid_body', message: 'Marque o som, o e-mail ou os dois.' } };
     }
   }
-  if (!strategyId && req.body.mode !== 'alarm' && req.body.options && walletOf(req.body.options.wallet) == null && req.body.options.wallet != null && req.body.options.wallet !== '') {
+  if (!strategyId && req.body.mode !== 'alarm' && req.body.options && walletOf(req.body.options.wallet, req.profile?.locale || 'pt-BR') == null && req.body.options.wallet != null && req.body.options.wallet !== '') {
     await savePrompt(req, {
       prompt, mode, status: 'rejected', detail: 'Carteira fora do intervalo.', strategyId,
       httpStatus: 400, errorStage: 'http',
@@ -1361,7 +1362,7 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
         locale: req.profile.locale || 'pt-BR',
         strategyId,
         mode: strategyId ? 'trade' : (req.body.mode === 'alarm' || /\b(me\s+avis\w*|alarme|alerta)\b/i.test(prompt) ? 'alarm' : 'trade'),
-        options: cleanOptions(req.body.options, prompt),
+        options: cleanOptions(req.body.options, prompt, req.profile?.locale || 'pt-BR'),
       }),
       thread,
       strategyId,
