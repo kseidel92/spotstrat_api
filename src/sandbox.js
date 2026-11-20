@@ -582,7 +582,7 @@ function ruleProse(text) {
 }
 
 function describesBook(prose) {
-  return /(?:\blivro\b|faixas do livro|primeiras(?:\s+\w+)?\s+faixas|desequil[ií]brio(?:\s+(?:comprador|vendedor|do\s+livro))?|ctx\.book|\bbids?\b|\basks?\b)/i.test(prose);
+  return /(?:\blivro\b|\bbook\b|faixas do livro|primeiras(?:\s+\w+)?\s+faixas|desequil[ií]brio(?:\s+(?:comprador|vendedor|do\s+livro))?|ctx\.book|\bbids?\b|\basks?\b)/i.test(prose);
 }
 
 function describesTrades(prose) {
@@ -633,6 +633,39 @@ function originCandleAsk(code, userText) {
   const keeps = /!==?\s*['"](?:used|done|seen|origins|originTimes)['"]/.test(src) || /\.(?:used|done|seen|origins|originTimes)\s*=/.test(src);
   if (!wipesAll || keeps) return '';
   return 'Não apague o time da vela que originou o nível. Guarde esse time numa lista ctx.memory.done que sobrevive ao prazo, ao cancelamento e à compra. A mesma vela não grava de novo.';
+}
+
+/**
+ * Perfil que pede livro/tape sem número: completa com o padrão do produto
+ * (mais quantidade no bid que no ask; tape comprador em 60s) só na entrada.
+ */
+function ensureFlowCoverage(code, userText) {
+  const prose = ruleProse(userText);
+  const needBook = describesBook(prose) && !/ctx\.book\s*\(/.test(String(code || ''));
+  const needTrades = describesTrades(prose) && !/ctx\.trades\s*\(/.test(String(code || ''));
+  const assumed = [];
+  if (!needBook && !needTrades) return { code: String(code || ''), assumed };
+  const lines = ['if (!ctx.position) {'];
+  if (needBook) {
+    lines.push('  const __book = ctx.book();');
+    lines.push('  const __bid = ((__book && __book.bids) || []).reduce((s, l) => s + (Number(l.qty) || 0), 0);');
+    lines.push('  const __ask = ((__book && __book.asks) || []).reduce((s, l) => s + (Number(l.qty) || 0), 0);');
+    lines.push('  if (!(__bid + __ask > 0) || __bid <= __ask) return { action: "hold" };');
+    assumed.push({ label: 'livro', value: 'mais quantidade na compra do que na venda' });
+  }
+  if (needTrades) {
+    lines.push('  const __tr = ctx.trades(60 * 1000);');
+    lines.push('  let __buy = 0, __sell = 0;');
+    lines.push('  for (const __t of __tr) { if (__t.buyerMaker) __sell += Number(__t.qty) || 0; else __buy += Number(__t.qty) || 0; }');
+    lines.push('  if (!(__buy + __sell > 0) || __buy <= __sell) return { action: "hold" };');
+    assumed.push({ label: 'tape', value: '60 segundos com mais compra agressiva' });
+  }
+  lines.push('}');
+  const next = String(code || '').replace(
+    /function\s+strategy\s*\(\s*ctx\s*\)\s*\{/,
+    (head) => `${head}\n  ${lines.join('\n  ')}`,
+  );
+  return { code: next, assumed };
 }
 
 function bookCoverageAsk(code, userText) {
@@ -897,6 +930,9 @@ function buildJsRecipe(data, userText, locale, options) {
   if (exitIsIndicatorOnly(userText)) {
     codeWorking = scrubBuyOcoForIndicatorExit(codeWorking);
   }
+  const flow = ensureFlowCoverage(codeWorking, userText);
+  codeWorking = flow.code;
+  if (flow.assumed.length) defaults.push(...flow.assumed);
   const numbers = checkNumbers(codeWorking, userText, defaults, locale, options);
   if (!numbers.ok) return { ask: numbers.error, retry: true };
   const chosen = chosenExitAsk(codeWorking, options);
@@ -962,7 +998,7 @@ function buildJsRecipe(data, userText, locale, options) {
     entry: scrubCtxJargon(scrubClaim(data.entryText || '')),
     exit: scrubCtxJargon(scrubClaim(data.exitText || '')),
     filters: scrubCtxJargon(defaults.length
-      ? `Completei: ${defaults.map((item) => `${item.label} ${item.value}`).join('; ')}. Dá para ajustar na conversa.`
+      ? `Completei: ${defaults.map((item) => `${item.label} ${item.value}`).join('; ')}. Dá para ajustar nos relatórios.`
       : 'A regra está no código da estratégia.'),
     risks: scrubCtxJargon(`${scrubClaim(data.risks || '')} Paper. O código rodou em candles de teste sem quebrar.`.trim()),
     paramsPlain: 'regra no simulador',

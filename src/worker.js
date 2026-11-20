@@ -412,7 +412,7 @@ async function runJob(job) {
       error: human,
       output: { provider: result.provider },
       detail: human,
-      errorStage: 'llm',
+      errorStage: result.errorStage || 'llm',
       httpStatus: 200,
     });
     return;

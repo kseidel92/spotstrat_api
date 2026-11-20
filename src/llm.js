@@ -527,7 +527,10 @@ async function completeRecipe({ messages, locale, current, labContext, mode, opt
     if (known) {
       return {
         failed: true,
-        error: 'Não consegui fechar o código desta regra agora. Tente criar de novo em instantes — o plano já está salvo na conversa.',
+        error: options && options.guided
+          ? 'Não consegui fechar o código desta regra. Tente criar de novo em instantes.'
+          : 'Não consegui fechar o código desta regra agora. Tente criar de novo em instantes — o plano já está salvo na conversa.',
+        errorStage: 'compile',
         provider,
       };
     }

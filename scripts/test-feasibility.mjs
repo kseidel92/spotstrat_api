@@ -115,4 +115,31 @@ assert(kept.recipe && !kept.failed, JSON.stringify(kept));
 assert(!/ctx\./.test(JSON.stringify(kept.recipe.explanation)));
 assert(/preço/.test(kept.recipe.explanation['pt-BR'].thesis));
 
+const safeText = `Crie uma estratégia de compra spot para o simulador SpotStrat.
+Perfil seguro: só comprar com confirmação de fluxo (livro e tape) e priorizar acerto sobre frequência.
+Só operar compra quando a maré do mercado estiver boa.
+Saída: Stop 0.6% e alvo 1.0% a partir da entrada.`;
+const safeCode = `function strategy(ctx) {
+  const c = ctx.candles("5m");
+  if (!c || c.length < 3) return { action: "hold" };
+  if (ctx.position) {
+    const entry = ctx.position.entry;
+    if (ctx.price <= entry * (1 - 0.6 / 100) || ctx.price >= entry * (1 + 1.0 / 100)) return { action: "sell" };
+    return { action: "hold" };
+  }
+  if (c[c.length - 1].close > c[c.length - 2].close) {
+    return { action: "buy", stop: ctx.price * (1 - 0.6 / 100), target: ctx.price * (1 + 1.0 / 100) };
+  }
+  return { action: "hold" };
+}`;
+const safeBuilt = buildJsRecipe({
+  name: 'QA safe',
+  thesis: 'Compra com confirmação de fluxo.',
+  code: safeCode,
+}, safeText, 'pt-BR', { guided: true, autoFill: true, exit: 'manual', stopPct: 0.6, tpPct: 1, mareMode: 'good' });
+assert(safeBuilt.recipe && !safeBuilt.failed, JSON.stringify(safeBuilt));
+assert(/ctx\.book\s*\(/.test(safeBuilt.recipe.code));
+assert(/ctx\.trades\s*\(/.test(safeBuilt.recipe.code));
+assert(!/conversa/i.test(JSON.stringify(safeBuilt.recipe.explanation)));
+
 console.log('test-feasibility: ok');
