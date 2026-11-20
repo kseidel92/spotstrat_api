@@ -578,6 +578,9 @@ function ruleProse(text) {
   body = body.replace(/[^.!\n]*(?:arquivo de 18 meses|esse arquivo [eé] s[oó] de velas)[^.!\n]*(?:livro|tape)[^.!\n]*[.!]?/gi, '');
   body = body.replace(/[^.!\n]*\bn[aã]o tem livro[^.!\n]*[.!]?/gi, '');
   body = body.replace(/[^.!\n]*\bsem livro[^.!\n]*[.!]?/gi, '');
+  // Nota interna do desk ("sem EMA usada como maré") não é pedido de média.
+  body = body.replace(/[^.!\n]*\bsem\s+(?:ctx\.)?(?:ema|sma|rsi|vwap)\b[^.!\n]*/gi, '');
+  body = body.replace(/[^.!\n]*n[aã]o implemente mar[eé][^.!\n]*/gi, '');
   return body;
 }
 
@@ -762,13 +765,18 @@ function patchManualExitLiterals(code, options) {
   if (!(stop > 0 && target > 0)) return String(code || '');
   let src = String(code || '');
   if (codeHasNumber(src, stop) && codeHasNumber(src, target)) return src;
+  const stopLit = `ctx.price * (1 - ${stop} / 100)`;
+  const targetLit = `ctx.price * (1 + ${target} / 100)`;
+  if (/\bstop\s*:/.test(src)) src = src.replace(/\bstop\s*:\s*[^,\n}]+/g, `stop: ${stopLit}`);
+  if (/\btarget\s*:/.test(src)) src = src.replace(/\btarget\s*:\s*[^,\n}]+/g, `target: ${targetLit}`);
+  if (codeHasNumber(src, stop) && codeHasNumber(src, target)) return src;
   if (!/action\s*:\s*['"]buy['"]/i.test(src)) return src;
   return src.replace(
     /(\{[^{}]*action\s*:\s*['"]buy['"][^{}]*)(\})/gi,
     (full, head, close) => {
       let chunk = head;
-      if (!/\bstop\s*:/i.test(chunk)) chunk += `, stop: price * (1 - ${stop}/100)`;
-      if (!/\btarget\s*:/i.test(chunk)) chunk += `, target: price * (1 + ${target}/100)`;
+      if (!/\bstop\s*:/i.test(chunk)) chunk += `, stop: ${stopLit}`;
+      if (!/\btarget\s*:/i.test(chunk)) chunk += `, target: ${targetLit}`;
       return `${chunk}${close}`;
     },
   );

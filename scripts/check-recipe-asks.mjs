@@ -97,13 +97,13 @@ assert(gListYes.list === 'yes' && /2 candles/.test(gListYes.listText), 'list/lis
 const briefGuide = `Brief.\nEntrada: No 5m comprar no rompimento.\nFontes: velas fechadas; livro de ofertas.\nLista: não grava preço. A compra acontece no próprio gatilho.\nSaída: Stop 0.9% e alvo 1.6% a partir da entrada.`;
 const codeMissingExit = `function strategy(ctx) { const c = ctx.candles("5m"); if (c.length < 2) return { action: "hold" }; return { action: "buy", stop: ctx.price, target: ctx.price }; }`;
 const guidedAsk = buildJsRecipe(
-  { code: codeMissingExit, ask: '', questions: [], defaults: [], name: 'G', thesis: 't', entryText: 'e', exitText: 'x', risks: '' },
+  { code: codeMissingExit, ask: '', questions: [], defaults: [], name: 'Guia', thesis: 'Compra no rompimento.', entryText: 'e', exitText: 'x', risks: '' },
   briefGuide,
   'pt-BR',
   { guided: true, exit: 'manual', stopPct: 0.9, tpPct: 1.6 },
 );
-assert(guidedAsk.ask, 'guided+manual exige stop/alvo no código');
-assert(/0[,.]9/.test(guidedAsk.ask) && /1[,.]6/.test(guidedAsk.ask), 'guided+manual cita stop/alvo escolhidos');
+assert(guidedAsk.recipe && !guidedAsk.ask, JSON.stringify(guidedAsk));
+assert(/0\.9/.test(guidedAsk.recipe.code) && /1\.6/.test(guidedAsk.recipe.code), 'guided+manual grava stop/alvo escolhidos');
 
 const gRegion = regionAsk('function strategy(ctx){ const c=ctx.candles("15m"); return {action:"hold"}; }', brief05);
 assert(gRegion, '05 exige região por testes nas 48 velas');

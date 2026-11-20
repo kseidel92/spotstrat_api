@@ -302,7 +302,7 @@ function settle(data, { messages, locale, current, mode, options }) {
     if (!built.recipe && (built.ask || (built.questions && built.questions.length))) {
       const q = (built.questions && built.questions[0]) || built.ask || '';
       if ((isInternalAsk(q) || isVagueTriggerAsk(q)) && (known || confirmingText(lastText))) {
-        return forceCodeAsk();
+        return { ask: q, retry: true };
       }
     }
     return built;
