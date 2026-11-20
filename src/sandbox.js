@@ -1071,6 +1071,17 @@ function exitPctFromCode(code) {
   return { stopPct, tpPct };
 }
 
+/** Tempo de saída escrito no JS (`minutesHeld >= 30`). */
+function exitTimeFromCode(code) {
+  const src = String(code || '');
+  const held = src.match(/minutesHeld\s*(?:>=|>|==|===)\s*(\d+(?:\.\d+)?)/)
+    || src.match(/(\d+(?:\.\d+)?)\s*(?:<=|<|==|===)\s*[\w.]*minutesHeld/);
+  if (!held) return { timeExit: false, maxHoldMin: null };
+  const minutes = Number(held[1]);
+  if (!(minutes >= 5 && minutes <= 1440)) return { timeExit: false, maxHoldMin: null };
+  return { timeExit: true, maxHoldMin: minutes };
+}
+
 /** Remove claims that attribute measured/default exits to the user. */
 function scrubFalseExitClaims(text) {
   return String(text || '')
@@ -1200,6 +1211,18 @@ function syncExitFromCode(recipe) {
   if (!recipe.exit) recipe.exit = { stopPct: 1, tpPct: 1, maxHoldMin: 1440, timeExit: false };
   if (fromCode.stopPct != null) recipe.exit.stopPct = fromCode.stopPct;
   if (fromCode.tpPct != null) recipe.exit.tpPct = fromCode.tpPct;
+  const time = exitTimeFromCode(recipe.code);
+  if (time.timeExit) {
+    recipe.exit.timeExit = true;
+    recipe.exit.maxHoldMin = time.maxHoldMin;
+    const note = `Fecha a posição depois de ${time.maxHoldMin} minutos se o stop e o alvo não saírem.`;
+    for (const block of Object.values(recipe.explanation || {})) {
+      if (!block || typeof block !== 'object') continue;
+      if (!new RegExp(`\\b${time.maxHoldMin}\\b`).test(String(block.exit || ''))) {
+        block.exit = `${block.exit || ''} ${note}`.trim();
+      }
+    }
+  }
   return recipe;
 }
 
@@ -1207,5 +1230,5 @@ module.exports = {
   sma, ema, rsi, atr, bb, macd, stoch, vwap, highest, lowest, crossedUp,
   validateCode, checkNumbers, buildJsRecipe, writeStrategyFile, scanJs, decideJs, runCode, makeCtx,
   returnAsk, regionAsk, bookCoverageAsk, tradesCoverageAsk, averagesCoverageAsk, reversalAsk, persistAggressionAsk,
-  exitPctFromCode, scrubFalseExitClaims, syncExitFromCode,
+  exitPctFromCode, exitTimeFromCode, scrubFalseExitClaims, syncExitFromCode,
 };

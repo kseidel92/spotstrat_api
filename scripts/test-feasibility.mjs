@@ -1,6 +1,6 @@
 import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scrubCtxJargon, exitIsIndicatorOnly } from '../src/feasibility.js';
 import { interpret } from '../src/interpret.js';
-import { makeCtx, buildJsRecipe } from '../src/sandbox.js';
+import { makeCtx, buildJsRecipe, syncExitFromCode } from '../src/sandbox.js';
 import assert from 'assert';
 
 assert(infeasiblePrompt('comprar quando a lua estiver cheia', 'pt-BR')?.failed);
@@ -165,5 +165,25 @@ const bookOnly = buildJsRecipe({
 assert(bookOnly.recipe && !bookOnly.ask, JSON.stringify(bookOnly));
 assert(/ctx\.book\s*\(/.test(bookOnly.recipe.code));
 assert(!/ctx\.ema\s*\(|ctx\.sma\s*\(/.test(bookOnly.recipe.code));
+
+const timed = syncExitFromCode({
+  name: 'Tempo',
+  code: `function strategy(ctx) {
+    if (ctx.position && ctx.position.minutesHeld >= 30) return { action: "sell" };
+    return { action: "buy", stop: ctx.price * (1 - 1 / 100), target: ctx.price * (1 + 2 / 100) };
+  }`,
+  exit: { stopPct: 1, tpPct: 2, maxHoldMin: 1440, timeExit: false },
+  explanation: { 'pt-BR': { thesis: 'Rompimento.', exit: 'Stop 1% e alvo 2%.' } },
+});
+assert.strictEqual(timed.exit.timeExit, true);
+assert.strictEqual(timed.exit.maxHoldMin, 30);
+assert(/30/.test(timed.explanation['pt-BR'].exit));
+
+const noTime = syncExitFromCode({
+  code: `function strategy(ctx) { return { action: "buy", stop: ctx.price * (1 - 1 / 100), target: ctx.price * (1 + 2 / 100) }; }`,
+  exit: { stopPct: 1, tpPct: 2, maxHoldMin: 1440, timeExit: false },
+});
+assert.strictEqual(noTime.exit.timeExit, false);
+assert.strictEqual(noTime.exit.maxHoldMin, 1440);
 
 console.log('test-feasibility: ok');
