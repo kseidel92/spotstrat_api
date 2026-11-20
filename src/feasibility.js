@@ -427,7 +427,7 @@ function scrubAlarmExplanation(explanation) {
   return next;
 }
 
-/** Corrige repetição imediata de sílaba (sobobre → sobre). Não mexe em código. */
+/** Ticket 11: corrige repetição imediata de sílaba (sobobre → sobre). Não mexe em código. */
 function polishExplanation(text) {
   return String(text || '').replace(/\p{L}{5,}/gu, (word) => word.replace(/(\p{L}{2,3})\1/gu, '$1'));
 }
