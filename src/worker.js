@@ -538,7 +538,7 @@ async function runJob(job) {
   }
   if (input.mode === 'alarm' && !input.strategyId) {
     recipe.explanation = scrubAlarmExplanation(recipe.explanation);
-    await correctExplanation(recipe, input.locale || 'pt-BR');
+    await correctExplanation(recipe, input.locale || 'pt-BR', { alarm: true });
     const alarmId = await saveAlarm(job, recipe);
     await finish(job, {
       status: 'done',

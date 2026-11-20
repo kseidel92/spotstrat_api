@@ -1,4 +1,4 @@
-import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scrubCtxJargon, exitIsIndicatorOnly, scrubAlarmExplanation, explanationCorrectionOk } from '../src/feasibility.js';
+import { infeasiblePrompt, nonExecutableJs, unknownCtxMembers, CTX_MEMBERS, scrubCtxJargon, exitIsIndicatorOnly, scrubAlarmExplanation, explanationCorrectionOk, prepareReaderCopy } from '../src/feasibility.js';
 import { parseLocaleNumber } from '../src/shared.js';
 import { interpret } from '../src/interpret.js';
 import { makeCtx, buildJsRecipe, syncExitFromCode } from '../src/sandbox.js';
@@ -208,5 +208,22 @@ assert(!explanationCorrectionOk(typo, 'Compra sobre o rompimento de 15m no ETH c
 assert(!explanationCorrectionOk(typo, 'Compra sobre o rompimento de 15m no BTC com RSI. Stop 2% e alvo 3%.'));
 assert(!explanationCorrectionOk(typo, 'Compra sobre o rompimento.'));
 assert(!explanationCorrectionOk(typo, 'function strategy(ctx) { return { action: "hold" }; }'));
+
+const reader = prepareReaderCopy({
+  code: 'function strategy(ctx) { return { action: "hold" }; }',
+  exit: { stopPct: 1.5, tpPct: 3, timeExit: true, maxHoldMin: 30 },
+  explanation: { 'pt-BR': { thesis: 'Compra quando ctx.rsi cruzar.', entry: '', exit: 'Sai no alvo.', filters: '', risks: '', paramsPlain: '' } },
+});
+assert(reader.code.startsWith('function strategy'));
+assert(!/ctx\./.test(reader.explanation['pt-BR'].thesis));
+assert(/RSI/.test(reader.explanation['pt-BR'].thesis));
+assert(/1,5%/.test(reader.explanation['pt-BR'].exit));
+assert(/30 minutos/.test(reader.explanation['pt-BR'].exit));
+const alarmReader = prepareReaderCopy({
+  code: reader.code,
+  exit: { stopPct: 1.2, tpPct: 1.8, timeExit: false, maxHoldMin: 1440 },
+  explanation: { 'pt-BR': { thesis: 'Avisa se subir 3%.', exit: '' } },
+}, { alarm: true });
+assert(!/1,2%/.test(alarmReader.explanation['pt-BR'].exit));
 
 console.log('test-feasibility: ok');

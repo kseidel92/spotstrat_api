@@ -429,6 +429,49 @@ function scrubAlarmExplanation(explanation) {
 
 const EXPLANATION_FIELDS = ['thesis', 'entry', 'exit', 'filters', 'risks', 'paramsPlain'];
 
+function formatReaderPct(value, locale) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  const rounded = Math.round(n * 10) / 10;
+  const text = Number.isInteger(rounded) ? String(rounded) : String(rounded);
+  return /^(en|ja|es-MX)/i.test(String(locale || '')) ? text : text.replace('.', ',');
+}
+
+/** Texto do trader alinhado ao código já validado. Não altera recipe.code. */
+function prepareReaderCopy(recipe, options = {}) {
+  if (!recipe || !recipe.explanation || typeof recipe.explanation !== 'object') return recipe;
+  const code = recipe.code;
+  const locale = options.locale || 'pt-BR';
+  const alarm = !!options.alarm;
+  for (const [key, block] of Object.entries(recipe.explanation)) {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) continue;
+    const next = { ...block };
+    for (const field of EXPLANATION_FIELDS) {
+      if (typeof next[field] === 'string') next[field] = scrubCtxJargon(next[field]);
+    }
+    if (!alarm && recipe.exit) next.exit = exitSentence(next.exit, recipe.exit, locale);
+    recipe.explanation[key] = next;
+  }
+  recipe.code = code;
+  return recipe;
+}
+
+function exitSentence(text, exit, locale) {
+  let body = String(text || '').trim();
+  const marks = explanationMarks(body);
+  const stop = Number(exit.stopPct);
+  const target = Number(exit.tpPct);
+  const hold = Number(exit.maxHoldMin);
+  const parts = [];
+  if (stop > 0 && !marks.numbers.includes(String(stop))) parts.push(`stop ${formatReaderPct(stop, locale)}%`);
+  if (target > 0 && !marks.numbers.includes(String(target))) parts.push(`alvo ${formatReaderPct(target, locale)}%`);
+  if (exit.timeExit && hold >= 5 && !marks.numbers.includes(String(hold))) {
+    parts.push(`fecha depois de ${hold} minutos se o stop e o alvo não saírem`);
+  }
+  if (!parts.length) return body;
+  return `${body} ${parts.join(' · ')}.`.trim();
+}
+
 function explanationMarks(text) {
   const src = String(text || '');
   const numbers = [...src.matchAll(/\d+(?:[.,]\d+)?/g)].map((match) => match[0].replace(',', '.'));
@@ -471,4 +514,5 @@ module.exports = {
   EXPLANATION_FIELDS,
   scrubAlarmExplanation,
   explanationCorrectionOk,
+  prepareReaderCopy,
 };

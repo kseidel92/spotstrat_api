@@ -1,7 +1,7 @@
 const { validateRecipe, netRR, MIN_NET_RR, OPS } = require('./shared');
 const { CATALOG, fromModel, RESPONSE_SCHEMA, systemPrompt } = require('./llmSchema');
 const { refusesSwap } = require('./interpret');
-const { infeasiblePrompt, EXPLANATION_FIELDS, explanationCorrectionOk } = require('./feasibility');
+const { infeasiblePrompt, EXPLANATION_FIELDS, explanationCorrectionOk, prepareReaderCopy } = require('./feasibility');
 const { recipeFromModel } = require('./script');
 const { buildJsRecipe } = require('./sandbox');
 
@@ -640,9 +640,10 @@ function spellLanguage(locale) {
 
 function spellSystem(locale) {
   return [
-    `Corrija só ortografia e acentuação em ${spellLanguage(locale)}.`,
+    `Corrija só ortografia, acentuação e frases truncadas em ${spellLanguage(locale)}.`,
     'Não mude números, porcentagens, siglas, tickers nem o sentido das frases.',
-    'Não escreva código e não mencione ctx.',
+    'Se aparecer jargão de implementação, troque por linguagem de trader sem mudar os números.',
+    'Não escreva código.',
     'Responda somente um JSON com as chaves thesis, entry, exit, filters, risks, paramsPlain.',
     'Se um campo vier vazio, devolva esse campo vazio.',
   ].join('\n');
@@ -721,9 +722,10 @@ async function correctSpellingBlock(source, locale) {
   return source;
 }
 
-/** Segunda chamada: só ortografia do texto, com o código já fechado. */
-async function correctExplanation(recipe, locale = 'pt-BR') {
+/** Segunda chamada: texto do trader, com o código já fechado. */
+async function correctExplanation(recipe, locale = 'pt-BR', options = {}) {
   if (!recipe || !recipe.explanation || typeof recipe.explanation !== 'object') return recipe;
+  prepareReaderCopy(recipe, { locale, alarm: !!options.alarm });
   const code = recipe.code;
   const cache = new Map();
   for (const [key, block] of Object.entries(recipe.explanation)) {
