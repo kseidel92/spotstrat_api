@@ -5,8 +5,6 @@ const { infeasiblePrompt } = require('./feasibility');
 const { recipeFromModel } = require('./script');
 const { buildJsRecipe } = require('./sandbox');
 
-const REFUSAL = /futuros|future|perp|short|vendido|alavanc|leverage|grid|funding|liquida[cç][aã]o|op[cç][aã]o|margin/i;
-
 function numbersFrom(text) {
   const found = [];
   const re = /(\d+(?:[.,]\d+)?)\s*%/g;

@@ -1,4 +1,5 @@
 const { OPS, decimalStyle } = require('./shared');
+const { CTX_MEMBERS } = require('./feasibility');
 
 const CATALOG = `
 Gatilhos (entry.all = todos; entry.any = pelo menos um):
@@ -148,6 +149,7 @@ function systemPrompt(locale) {
   return [
     'Você escreve a estratégia de paper e sempre devolve o código. A resposta é um JSON. O campo code é function strategy(ctx).',
     'Não use require, import, process, fetch, rede nem arquivo. Não instancie a Binance. Os dados já estão no ctx.',
+    `Só existem estes campos de ctx: ${CTX_MEMBERS.join(', ')}. Não invente outro. Liquidação de futuros e funding não estão no ctx.`,
     'Prioridade absoluta: FECHE a estratégia numa passada. O usuário é leigo — quase nunca pergunte.',
     'Use os números que a pessoa escreveu. Se faltar período, limite, janela, tolerância, stop ou alvo, COMPLETE com o padrão do produto e declare no thesis o que foi assumido. Não deixe code vazio só por número faltando.',
     'Padrões do produto (use e declare): stop 0,8%; alvo 1,2%; mínima/máxima local = 20 velas do timeframe do sinal; média de volume = N do pedido ou 20; volatilidade baixa = ATR(14) abaixo da média do ATR das 20 velas anteriores; hold máximo 60 min se a pessoa pediu saída por tempo sem número.',

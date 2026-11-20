@@ -3,7 +3,7 @@ const path = require('path');
 const vm = require('vm');
 const { validateRecipe, promptNumbers, brtDay, localeFamily } = require('./shared');
 const { bars } = require('./faithful');
-const { nonExecutableJs, userRejectedFixedExit, exitIsIndicatorOnly } = require('./feasibility');
+const { executableFailure, scrubCtxJargon, userRejectedFixedExit, exitIsIndicatorOnly } = require('./feasibility');
 
 const DIR = path.join(__dirname, '../data/strategies');
 const MARK = '\n// --- strategy ---\n';
@@ -956,14 +956,14 @@ function buildJsRecipe(data, userText, locale, options) {
     return out;
   };
   const text = {
-    thesis: scrubClaim(data.thesis || 'Regra escrita pela IA e validada nos candles.'),
-    entry: scrubClaim(data.entryText || ''),
-    exit: scrubClaim(data.exitText || ''),
-    filters: defaults.length
+    thesis: scrubCtxJargon(scrubClaim(data.thesis || 'Regra escrita pela IA e validada nos candles.')),
+    entry: scrubCtxJargon(scrubClaim(data.entryText || '')),
+    exit: scrubCtxJargon(scrubClaim(data.exitText || '')),
+    filters: scrubCtxJargon(defaults.length
       ? `Completei: ${defaults.map((item) => `${item.label} ${item.value}`).join('; ')}. Dá para ajustar na conversa.`
-      : 'A regra está no código da estratégia.',
-    risks: `${scrubClaim(data.risks || '')} Paper. O código rodou em candles de teste sem quebrar.`.trim(),
-    paramsPlain: 'strategy(ctx)',
+      : 'A regra está no código da estratégia.'),
+    risks: scrubCtxJargon(`${scrubClaim(data.risks || '')} Paper. O código rodou em candles de teste sem quebrar.`.trim()),
+    paramsPlain: 'regra no simulador',
   };
   const name = String(data.name || 'Estratégia').slice(0, 80);
   const assumptions = defaults.length
@@ -997,16 +997,8 @@ function buildJsRecipe(data, userText, locale, options) {
   const check = validateRecipe(recipe);
   if (!check.ok) return { ask: 'Não fechei a estratégia.', retry: true };
   syncExitFromCode(recipe);
-  const loc = localeFamily(locale);
-  const dead = nonExecutableJs(code, text.thesis);
-  if (dead) {
-    const msgPt = 'Não dá para criar essa estratégia: o pedido usa sinais que o simulador não mede (ex.: lua, spread exato ou dados fora do par). Reformule com velas, volume, médias, livro ou tape.';
-    const msgEn = 'We cannot create this strategy: the request uses signals the simulator cannot measure. Rephrase using candles, volume, averages, book or tape.';
-    return {
-      failed: true,
-      error: /^pt/i.test(loc) ? msgPt : msgEn,
-    };
-  }
+  const dead = executableFailure(codeWorking, text.thesis, locale);
+  if (dead) return dead;
   return { recipe };
 }
 
