@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('./db');
 const { PRESETS, publicPreset, localizedExplanation } = require('./presets');
 const {
-  id, sha256, emptySnap, walletOf, parseLocaleNumber, publicUser, deskAllowed, TRIAL_HOURS, LOCALES, alarmSoundKind,
+  id, sha256, emptySnap, walletOf, parseLocaleNumber, publicUser, deskAllowed, LOCALES, alarmSoundKind,
 } = require('./shared');
 const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
@@ -115,20 +115,6 @@ function auth(req, res, next) {
   return next();
 }
 
-async function openTrial(userId) {
-  const hours = TRIAL_HOURS;
-  const { rows } = await pool.query(
-    `UPDATE users
-     SET trial_started_at = now(),
-         trial_ends_at = now() + ($2 || ' hours')::interval,
-         plan_status = 'trialing'
-     WHERE id = $1 AND trial_started_at IS NULL
-     RETURNING *`,
-    [userId, String(hours)],
-  );
-  return rows[0];
-}
-
 async function maybeStripeCustomer(user) {
   const key = (process.env.STRIPE_SECRET_KEY || '').trim();
   if (!key || user.stripe_customer_id) return;
@@ -174,15 +160,13 @@ function createHttp(desk) {
   }
 
   function requireDesk(req, res, next) {
-    // Leitura segue aberta. Criar, editar e simular exigem e-mail confirmado e acesso vigente.
-    if (req.method === 'GET' || req.method === 'HEAD') return next();
     if (req.profile.desk === 'unverified') {
       return res.status(403).json({ error: 'unverified', message: 'Confirme o e-mail para entrar no desk.' });
     }
     if (!deskAllowed(req.profile)) {
       return res.status(402).json({
         error: 'trial_expired',
-        message: 'O acesso terminou. Escolha paper ou pro para continuar.',
+        message: 'O acesso terminou. Escolha um plano para continuar.',
       });
     }
     return next();
@@ -344,7 +328,6 @@ function createHttp(desk) {
       [passwordHash, user.id],
     );
     const fresh = await loadUser(user.id);
-    if (!fresh.trial_started_at) await openTrial(fresh.id);
     await maybeStripeCustomer(fresh);
     await desk.reloadUser(fresh.id);
     return res.json({ ok: true });
@@ -421,8 +404,8 @@ function createHttp(desk) {
         [sub, name || '', user.id],
       );
     }
-    if (!user.trial_started_at) await openTrial(user.id);
     user = await freshUser(await loadUser(user.id));
+    await maybeStripeCustomer(user);
     await desk.reloadUser(user.id);
     await issueRefresh(res, user.id, req.body.remember !== false);
     return res.json({
@@ -461,10 +444,7 @@ function createHttp(desk) {
     if (!ok) return res.status(400).json({ error: 'bad_code', message: 'Código de e-mail inválido ou vencido.' });
     await pool.query('UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1', [req.user.id]);
     const fresh = await loadUser(req.user.id);
-    if (fresh.email_verified_at) {
-      await openTrial(fresh.id);
-      await maybeStripeCustomer(fresh);
-    }
+    if (fresh.email_verified_at) await maybeStripeCustomer(fresh);
     const user = await loadUser(req.user.id);
     await desk.reloadUser(user.id);
     return res.json({ user: publicUser(user) });
@@ -476,10 +456,7 @@ function createHttp(desk) {
     if (!ok) return res.status(400).json({ error: 'bad_code', message: 'Código do celular inválido ou vencido.' });
     await pool.query('UPDATE users SET phone_verified_at = COALESCE(phone_verified_at, now()) WHERE id = $1', [req.user.id]);
     const fresh = await loadUser(req.user.id);
-    if (fresh.email_verified_at && fresh.phone_verified_at) {
-      await openTrial(fresh.id);
-      await maybeStripeCustomer(fresh);
-    }
+    if (fresh.email_verified_at && fresh.phone_verified_at) await maybeStripeCustomer(fresh);
     const user = await loadUser(req.user.id);
     await desk.reloadUser(user.id);
     return res.json({ user: publicUser(user) });
