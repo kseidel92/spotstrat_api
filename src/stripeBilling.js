@@ -9,8 +9,13 @@ function stripeClient() {
 }
 
 function stripeConfigured() {
-  return !!(process.env.STRIPE_SECRET_KEY || '').trim()
-    && !!(process.env.STRIPE_PRICE_ID || '').trim();
+  const key = (process.env.STRIPE_SECRET_KEY || '').trim();
+  const hasPaper = [1, 3, 6, 12].some((m) => {
+    const env = process.env[`STRIPE_PRICE_PAPER_${m === 12 ? '12M' : `${m}M`}`];
+    return !!(env || '').trim();
+  });
+  const fallback = (process.env.STRIPE_PRICE_ID || '').trim();
+  return !!(key && (hasPaper || fallback));
 }
 
 function publishableKey() {
@@ -54,6 +59,11 @@ function monthsFromStripePrice(price) {
 
 async function resolveAccessMonths(stripe, priceId, requestedMonths) {
   const price = await stripe.prices.retrieve(priceId);
+  const metaMonths = Number(price.metadata?.access_months);
+  if ([1, 3, 6, 12].includes(metaMonths)) {
+    const mode = price.type === 'recurring' ? 'subscription' : 'payment';
+    return { months: metaMonths, price, mode };
+  }
   const fromRecurring = monthsFromStripePrice(price);
   if (fromRecurring != null) return { months: fromRecurring, price, mode: 'subscription' };
 

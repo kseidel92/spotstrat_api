@@ -1,126 +1,118 @@
 # Stripe Integration TODO
 
-Integração: **Hosted Checkout** (`ui_mode: hosted_page`) + assinatura (Price SpotStrat R$ 1,00 é **recurring**).
+Integração: **Hosted Checkout** (`ui_mode: hosted_page`, SDK `stripe@^23`).  
+Planos **Paper**: 1 mês (assinatura), 3 / 6 / 12 meses (pagamento único). Produção: R$ 319,33 (pagamento único).
 
-Status (2026-10-26): keys live + webhook + price gravados no `.env` local (não commitado). Código detecta Price recorrente e usa `mode: subscription`.
+Status (2026-11-25): produtos/prices criados via `scripts/setup-stripe-products.mjs`; IDs gravados em `apis/.env` (local). Compras liberadas com `SALES_OPEN=true` (contagem do lançamento no site segue).
 
 ---
 
 ## Values to Replace
 
-Quase tudo preenchido no servidor. Opcional:
+Nada obrigatório em **test mode** após rodar o script. Para **produção live**:
 
 **Arquivos:**
-- [`src/stripeBilling.js`](src/stripeBilling.js)
 - [`.env`](.env) (local; não commitado)
+- [`src/stripeBilling.js`](src/stripeBilling.js)
 
 | Field | Current Value | What to Set |
 |-------|---------------|-------------|
-| `mode` | auto (`subscription` para o Price atual) | Override com `STRIPE_CHECKOUT_MODE=payment` só se criar Price **one-time**. |
-| `success_url` / `cancel_url` | `STRIPE_CHECKOUT_ORIGIN` → `https://www.spotstrat.com` | OK |
-| `line_items[].price` | `price_1UUbHhDq0twHHqXV86l68bu8` (R$ 1,00 BRL recurring) | OK |
-| `STRIPE_PUBLISHABLE_KEY` | vazio | **Opcional** no fluxo hosted (redirect). Se for usar Elements depois: Dashboard → API keys → `pk_live_…` |
+| `STRIPE_SECRET_KEY` | `sk_test_…` | `sk_live_…` no go-live |
+| `STRIPE_PUBLISHABLE_KEY` | `pk_test_…` | `pk_live_…` |
+| `STRIPE_PRICE_PAPER_*` / `STRIPE_PRICE_PRODUCTION_ID` | IDs test | Recrie com `node scripts/setup-stripe-products.mjs --live` em live mode |
+| `SALES_OPEN` | `true` | `false` para bloquear checkout até o lançamento oficial |
+| `STRIPE_CHECKOUT_MODE` | (vazio = auto) | Não force `subscription` — cada Price define o mode |
+
+`success_url` / `cancel_url`: derivados de `STRIPE_CHECKOUT_ORIGIN` ou `WEB_ORIGIN` em [`src/stripeBilling.js`](src/stripeBilling.js).
 
 ---
 
 ## Configured Parameters
 
-Parâmetros do Checkout Studio já aplicados em [`src/stripeBilling.js`](src/stripeBilling.js):
+Checkout Studio em [`src/stripeBilling.js`](src/stripeBilling.js) (`createEmbeddedCheckout`):
 
 | Parameter | Value |
 |-----------|-------|
-| `ui_mode` | `hosted_page` (SDK `stripe@^23`) |
+| `ui_mode` | `hosted_page` |
 | `billing_address_collection` | `auto` |
 | `phone_number_collection` | `{ enabled: false }` |
 | `automatic_tax` | `{ enabled: false }` |
 | `allow_promotion_codes` | `false` |
+| `payment_method_collection` | `always` (somente se `mode: subscription`) |
 | `submit_type` | `auto` |
 | `integration_identifier` | `hosted_web_0001` |
 | `origin_context` | `web` |
 
-`payment_method_collection` **não** foi incluído: só se aplica com `mode: subscription` (regra Stripe / prompt).
+---
 
-Mantidos para anti-golpe / fulfillment: `customer`, `client_reference_id`, `metadata`, `payment_intent_data`, `locale`.
+## Preços SpotStrat (BRL)
+
+| Plano | Valor cobrado | Stripe env |
+|-------|----------------|------------|
+| 1 mês (recorrente) | R$ 93,33/mês | `STRIPE_PRICE_PAPER_1M` |
+| 3 meses | R$ 252,00 | `STRIPE_PRICE_PAPER_3M` |
+| 6 meses | R$ 459,18 | `STRIPE_PRICE_PAPER_6M` |
+| 12 meses | R$ 806,40 | `STRIPE_PRICE_PAPER_12M` |
+| Produção | R$ 319,33 | `STRIPE_PRICE_PRODUCTION_ID` |
+
+Recriar / idempotente:
+
+```bash
+cd apis && node scripts/setup-stripe-products.mjs
+```
 
 ---
 
 ## Setup and next steps
 
-### 1. Variáveis no `apis/.env` (obrigatórias — hoje estão vazias)
+### 1. Variáveis (`apis/.env`)
 
-Cole no Dashboard e preencha:
+| Variável | Descrição |
+|----------|-----------|
+| `STRIPE_SECRET_KEY` | Secret key |
+| `STRIPE_PUBLISHABLE_KEY` | Publishable (opcional no redirect hosted; útil no `/v1/config`) |
+| `STRIPE_WEBHOOK_SECRET` | Signing secret do endpoint |
+| `STRIPE_PRICE_PAPER_1M` … `STRIPE_PRICE_PAPER_12M` | Prices por prazo |
+| `STRIPE_PRICE_PRODUCTION_ID` | Price produção |
+| `STRIPE_ALLOW_SIMULATE` | `false` |
+| `SALES_OPEN` | `true` libera checkout antes do `LAUNCH_AT` |
+| `WEB_ORIGIN` / `STRIPE_CHECKOUT_ORIGIN` | Domínio do front nas URLs de retorno |
 
-| Variável | Onde pegar |
-|----------|------------|
-| `STRIPE_SECRET_KEY` | [API keys](https://dashboard.stripe.com/test/apikeys) → Secret (`sk_test_…`) |
-| `STRIPE_PUBLISHABLE_KEY` | Mesma tela → Publishable (`pk_test_…`) |
-| `STRIPE_WEBHOOK_SECRET` | [Webhooks](https://dashboard.stripe.com/test/workbench/webhooks) → Signing secret (`whsec_…`) |
-| `STRIPE_PRICE_ID` | [Prices](https://dashboard.stripe.com/test/prices) → Price do produto de **R$ 1,00** (`price_…`) |
-
-Opcionais (senão usam `STRIPE_PRICE_ID`):
-`STRIPE_PRICE_PAPER_1M`, `STRIPE_PRICE_PAPER_3M`, …, `STRIPE_PRICE_PRODUCTION_ID`
-
-Já deve existir:
-- `WEB_ORIGIN` com o domínio do front
-- `STRIPE_ALLOW_SIMULATE=false`
-
-**Não** use prefixo `VITE_` nestas keys — são só no servidor (`apis`).
+Sem prefixo `VITE_` na API.
 
 ### 2. Webhook
 
-Crie endpoint (modo teste) com eventos:
-
-- `checkout.session.completed`
-- `checkout.session.async_payment_succeeded`
-- `checkout.session.expired`
-- `charge.refunded`
-- `charge.dispute.created`
-
-URL (preferir túnel direto para assinatura raw):
-
-```text
-https://<seu-tunnel>.trycloudflare.com/v1/billing/webhook
-```
-
-Alternativa via cloud (corpo raw preservado):
-
-```text
-https://spotstratcloud.vercel.app/v1/billing/webhook
-```
-
-Copie o `whsec_…` para `STRIPE_WEBHOOK_SECRET`.
-
-### 3. Reiniciar a API
-
-Depois de salvar o `.env`:
+Eventos: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.expired`, `customer.subscription.deleted`, `invoice.paid`, `charge.refunded`, `charge.dispute.created`.
 
 ```bash
-cd apis && ./scripts/go-online.sh --no-push
-# ou reinicie o processo node src/index.js
+cd apis && node scripts/sync-stripe-webhook.mjs https://<tunnel>/v1/billing/webhook
 ```
 
-### 4. Fluxo
+Ou `go-online.sh` (faz sync automaticamente com túnel ativo).
 
-1. Usuário clica em pagar no front.
-2. API cria Checkout Session (hosted) e devolve `url`.
-3. Browser redireciona para a página da Stripe.
-4. Sucesso → `success_url` → app confirma via `GET /v1/billing/session/:id` + webhook grava `stripe_events` / `stripe_checkouts` / `purchases`.
-5. Backoffice → Pagamentos mostra o rastreio.
+### 3. Reiniciar API
 
-### 5. Teste
+```bash
+cd apis && ./scripts/go-online.sh --watch
+```
 
-Cartão teste: `4242 4242 4242 4242`, validade futura, CVC qualquer, CEP qualquer.
+### 4. Front
 
-Use **Test mode** no Dashboard.
+O front lê `salesOpen` em `GET /v1/config` — precisa da API com `SALES_OPEN=true` (opcional no Vercel: `VITE_SALES_OPEN=true`).
 
-### 6. Depois do teste
+### 5. Fluxo
 
-- Trocar keys `sk_test` / `pk_test` por live quando for produção.
-- Criar Prices reais por plano (paper/pro/meses) se quiser valores distintos do R$ 1,00.
-- Conferir no backoffice: checkouts, eventos webhook, compras creditadas.
+1. Usuário escolhe prazo → `POST /v1/billing/checkout`
+2. API usa o Price do prazo, cria Session hosted, devolve `url`
+3. Redirect Stripe → `success_url` → `GET /v1/billing/session/:id` + webhook
+4. `purchases` / `users.plan_status` atualizados; backoffice → Pagamentos
+
+### 6. Teste
+
+Cartão: `4242 4242 4242 4242`. Modo test no Dashboard.
 
 ### Resources
 
-- https://docs.stripe.com/checkout/quickstart
-- https://docs.stripe.com/mcp
+- https://docs.stripe.com/checkout/quickstart  
+- https://docs.stripe.com/mcp  
 - https://support.stripe.com

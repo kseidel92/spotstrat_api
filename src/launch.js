@@ -2,6 +2,7 @@
 const LAUNCH_AT = Date.UTC(2026, 11, 3, 18, 0, 0);
 
 function salesOpen(now = Date.now()) {
+  if (String(process.env.SALES_OPEN || '').toLowerCase() === 'true') return true;
   return now >= LAUNCH_AT;
 }
 

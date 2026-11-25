@@ -16,7 +16,7 @@ const { suggestGuide } = require('./llm');
 const { missingTrigger, exitIsIndicatorOnly } = require('./feasibility');
 const { mountAdmin } = require('./admin');
 const stripeBilling = require('./stripeBilling');
-const { salesOpen, salesClosedPayload } = require('./launch');
+const { LAUNCH_AT, salesOpen, salesClosedPayload } = require('./launch');
 
 const hits = new Map();
 
@@ -532,6 +532,8 @@ function createHttp(desk) {
       googleClientId: (process.env.GOOGLE_CLIENT_ID || '').trim(),
       stripePublishableKey: stripeBilling.publishableKey() || null,
       stripeReady: stripeBilling.stripeConfigured(),
+      salesOpen: salesOpen(),
+      launchAt: new Date(LAUNCH_AT).toISOString(),
     });
   });
 

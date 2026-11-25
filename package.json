@@ -14,7 +14,8 @@
     "tunnel:stop": "./cloudflare/stop-tunnel.sh",
     "online": "./scripts/go-online.sh",
     "online:watch": "./scripts/go-online.sh --watch",
-    "online:front": "./scripts/go-online.sh --front"
+    "online:front": "./scripts/go-online.sh --front",
+    "stripe:setup": "node scripts/setup-stripe-products.mjs"
   },
   "engines": {
     "node": ">=20"
