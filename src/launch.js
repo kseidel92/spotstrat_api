@@ -1,5 +1,5 @@
-/** 28 Nov 2026, 15:00 Brasília (GMT−3). */
-const LAUNCH_AT = Date.UTC(2026, 10, 28, 18, 0, 0);
+/** 3 Dez 2026, 15:00 Brasília (GMT−3). */
+const LAUNCH_AT = Date.UTC(2026, 11, 3, 18, 0, 0);
 
 function salesOpen(now = Date.now()) {
   return now >= LAUNCH_AT;
