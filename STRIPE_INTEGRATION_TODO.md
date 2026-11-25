@@ -53,7 +53,9 @@ Checkout Studio em [`src/stripeBilling.js`](src/stripeBilling.js) (`createEmbedd
 | 3 meses | R$ 252,00 | `STRIPE_PRICE_PAPER_3M` |
 | 6 meses | R$ 459,18 | `STRIPE_PRICE_PAPER_6M` |
 | 12 meses | R$ 806,40 | `STRIPE_PRICE_PAPER_12M` |
-| Produção | R$ 319,33 | `STRIPE_PRICE_PRODUCTION_ID` |
+| Produção (pagamento único) | R$ 319,33 | `STRIPE_PRICE_PRODUCTION_ID` — **não** usa fallback do plano mensal |
+
+Checkout: `POST /v1/strategies/:id/production` → fulfill grava `production_orders` (backoffice → Pagamentos → Pedidos de produção + Checkouts `kind=production`).
 
 Recriar / idempotente:
 

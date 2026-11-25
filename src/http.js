@@ -532,6 +532,7 @@ function createHttp(desk) {
       googleClientId: (process.env.GOOGLE_CLIENT_ID || '').trim(),
       stripePublishableKey: stripeBilling.publishableKey() || null,
       stripeReady: stripeBilling.stripeConfigured(),
+      stripeProductionReady: stripeBilling.stripeProductionReady(),
       salesOpen: salesOpen(),
       launchAt: new Date(LAUNCH_AT).toISOString(),
     });
@@ -802,6 +803,8 @@ function createHttp(desk) {
       status: row.status,
       paidAt: row.paid_at,
       readyBy: row.ready_by,
+      stripeSessionId: row.stripe_session_id || null,
+      provider: row.provider || 'stripe',
     };
   }
 
@@ -824,6 +827,8 @@ function createHttp(desk) {
       strategy: { id: strategies[0].id, name: strategies[0].name },
       quote: productionQuote(quoteLocale(req)),
       order: orderView(rows[0]),
+      stripeReady: stripeBilling.stripeProductionReady(),
+      salesOpen: salesOpen(),
     });
   });
 
@@ -843,10 +848,17 @@ function createHttp(desk) {
     if (existing[0]) return res.json({ order: orderView(existing[0]), already: true });
     const locale = LOCALES.includes(req.body.locale) ? req.body.locale : quoteLocale(req);
     try {
+      if (!stripeBilling.stripeProductionReady()) {
+        return res.status(503).json({
+          error: 'stripe_off',
+          message: 'Pagamento de produção Stripe não configurado (STRIPE_PRICE_PRODUCTION_ID).',
+        });
+      }
       const session = await stripeBilling.createEmbeddedCheckout({
         user: req.user,
         kind: 'production',
         strategyId: strategies[0].id,
+        strategyName: strategies[0].name,
         locale,
       });
       return res.json({ checkout: session, quote: productionQuote(locale) });

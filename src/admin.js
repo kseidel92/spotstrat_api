@@ -1,4 +1,5 @@
 const { pool } = require('./db');
+const stripeBilling = require('./stripeBilling');
 
 function clientIp(req) {
   const raw = req.socket?.remoteAddress || req.connection?.remoteAddress || '';
@@ -38,11 +39,19 @@ function mountAdmin(app) {
   app.use('/v1/admin', requireLocalAdmin);
 
   app.get('/v1/admin/health', (_req, res) => {
-    res.json({ ok: true, scope: 'backoffice', localOnly: true });
+    res.json({
+      ok: true,
+      scope: 'backoffice',
+      localOnly: true,
+      stripe: {
+        plans: stripeBilling.stripeConfigured(),
+        production: stripeBilling.stripeProductionReady(),
+      },
+    });
   });
 
   app.get('/v1/admin/overview', async (_req, res) => {
-    const [users, prompts, jobs, purchases, production, help, outbound, cancels, contact] = await Promise.all([
+    const [users, prompts, jobs, purchases, production, stripe30d, help, outbound, cancels, contact] = await Promise.all([
       pool.query(`
         SELECT
           count(*)::int AS total,
@@ -77,8 +86,19 @@ function mountAdmin(app) {
       `),
       pool.query(`
         SELECT count(*)::int AS total,
-               coalesce(sum(amount_brl), 0)::float AS revenue_brl
+               coalesce(sum(amount_brl), 0)::float AS revenue_brl,
+               count(*) FILTER (WHERE created_at > now() - interval '30 days')::int AS last_30d
         FROM production_orders WHERE status = 'paid'
+      `),
+      pool.query(`
+        SELECT
+          count(*)::int AS total,
+          count(*) FILTER (WHERE kind = 'production')::int AS production,
+          count(*) FILTER (WHERE kind = 'plan')::int AS plan,
+          count(*) FILTER (WHERE payment_status = 'paid')::int AS paid,
+          count(*) FILTER (WHERE fulfilled_at IS NULL AND payment_status = 'paid')::int AS unfulfilled_paid
+        FROM stripe_checkouts
+        WHERE created_at > now() - interval '30 days'
       `),
       pool.query(`
         SELECT count(*)::int AS total,
@@ -109,6 +129,7 @@ function mountAdmin(app) {
       jobs: jobs.rows[0],
       purchases: purchases.rows[0],
       production: production.rows[0],
+      stripe30d: stripe30d.rows[0],
       help: help.rows[0],
       outbound7d: outbound.rows[0],
       cancellations: cancels.rows[0],
@@ -230,7 +251,12 @@ function mountAdmin(app) {
   app.get('/v1/admin/stripe-checkouts', async (req, res) => {
     const limit = clampInt(req.query.limit, 50, 1, 200);
     const { rows } = await pool.query(
-      `SELECT c.*, u.email, u.name, u.plan_status, u.trial_ends_at AS user_access_ends_at
+      `SELECT c.*,
+              u.email, u.name, u.plan_status, u.trial_ends_at AS user_access_ends_at,
+              c.metadata->>'strategyId' AS strategy_id,
+              c.metadata->>'strategyName' AS strategy_name,
+              c.metadata->>'tier' AS plan_tier,
+              c.metadata->>'months' AS plan_months
        FROM stripe_checkouts c
        LEFT JOIN users u ON u.id = c.user_id
        ORDER BY c.created_at DESC
@@ -259,7 +285,14 @@ function mountAdmin(app) {
   app.get('/v1/admin/production-orders', async (req, res) => {
     const limit = clampInt(req.query.limit, 50, 1, 200);
     const { rows } = await pool.query(
-      `SELECT * FROM production_orders ORDER BY created_at DESC LIMIT $1`,
+      `SELECT o.*,
+              c.payment_status AS stripe_payment_status,
+              c.price_id AS stripe_price_id,
+              c.fulfilled_at AS stripe_fulfilled_at
+       FROM production_orders o
+       LEFT JOIN stripe_checkouts c ON c.id = o.stripe_session_id
+       ORDER BY o.created_at DESC
+       LIMIT $1`,
       [limit],
     );
     res.json({ orders: rows });

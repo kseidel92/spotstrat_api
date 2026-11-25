@@ -264,6 +264,7 @@ CREATE TABLE IF NOT EXISTS production_orders (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS production_orders_one_idx ON production_orders (user_id, strategy_id);
 ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS stripe_session_id text;
+ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT 'stripe';
 
 CREATE TABLE IF NOT EXISTS positions (
   strategy_id text PRIMARY KEY REFERENCES strategies(id) ON DELETE CASCADE,

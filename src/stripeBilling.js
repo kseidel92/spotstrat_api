@@ -18,6 +18,11 @@ function stripeConfigured() {
   return !!(key && (hasPaper || fallback));
 }
 
+function stripeProductionReady() {
+  const key = (process.env.STRIPE_SECRET_KEY || '').trim();
+  return !!(key && priceForProduction());
+}
+
 function publishableKey() {
   return (process.env.STRIPE_PUBLISHABLE_KEY || '').trim();
 }
@@ -43,7 +48,7 @@ function priceForPlan(tier, months) {
 }
 
 function priceForProduction() {
-  return (process.env.STRIPE_PRICE_PRODUCTION_ID || process.env.STRIPE_PRICE_ID || '').trim();
+  return (process.env.STRIPE_PRICE_PRODUCTION_ID || '').trim();
 }
 
 /** Duração de acesso em meses — nunca confiar no body do cliente para o Price padrão. */
@@ -301,10 +306,10 @@ async function fulfillProduction(session, desk) {
   if (session.payment_status && session.payment_status !== 'paid') {
     throw new Error(`payment_status=${session.payment_status}`);
   }
-  const { addBusinessDays } = require('./plans');
+  const { addBusinessDays, productionQuote } = require('./plans');
   const amountTotal = Number(session.amount_total || 0);
-  const currency = String(session.currency || 'brl').toUpperCase();
-  const amountBrl = amountTotal / 100;
+  const paidCurrency = String(session.currency || 'brl').toLowerCase();
+  const amountBrl = paidCurrency === 'brl' ? amountTotal / 100 : Number(meta.amountBrl) || amountTotal / 100;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -326,32 +331,36 @@ async function fulfillProduction(session, desk) {
     if (!user) throw new Error('usuário não encontrado');
     const readyBy = addBusinessDays(new Date(), 3);
     const recipe = strategies[0].recipe || strategies[0].params || {};
+    const locale = meta.locale || user.locale || 'pt-BR';
+    const quote = productionQuote(locale);
     await client.query(
       `INSERT INTO production_orders (
          user_id, user_email, user_name, locale, strategy_id, strategy_name, thesis, recipe,
-         amount_brl, currency, local_amount, fx_rate, status, ready_by, stripe_session_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,'paid',$13,$14)
+         amount_brl, currency, local_amount, fx_rate, status, ready_by, stripe_session_id, provider
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,'paid',$13,$14,'stripe')
        ON CONFLICT (user_id, strategy_id) DO UPDATE SET
          status = 'paid',
          amount_brl = EXCLUDED.amount_brl,
          currency = EXCLUDED.currency,
          local_amount = EXCLUDED.local_amount,
+         fx_rate = EXCLUDED.fx_rate,
          stripe_session_id = EXCLUDED.stripe_session_id,
+         provider = 'stripe',
          paid_at = now(),
          ready_by = EXCLUDED.ready_by`,
       [
         userId,
         user.email,
         user.name,
-        meta.locale || user.locale || 'pt-BR',
+        locale,
         strategyId,
         strategies[0].name,
         strategies[0].description || null,
         JSON.stringify(recipe),
         amountBrl,
-        currency,
-        amountBrl,
-        1,
+        quote.currency,
+        quote.localAmount,
+        quote.fxRate,
         readyBy.toISOString(),
         session.id,
       ],
@@ -373,7 +382,7 @@ async function fulfillProduction(session, desk) {
           `Id: ${user.id}`,
           `Estratégia: ${strategies[0].name} (${strategyId})`,
           `Stripe session: ${session.id}`,
-          `Valor: ${amountBrl} ${currency}`,
+          `Valor: ${amountBrl} BRL (${quote.localAmount} ${quote.currency})`,
           `Pronto em média até: ${readyBy.toISOString()}`,
         ].join('\n'),
       );
@@ -397,7 +406,7 @@ async function fulfillSession(session, desk) {
 }
 
 async function createEmbeddedCheckout({
-  user, kind = 'plan', tier = 'paper', months = 1, strategyId = null, locale = 'pt-BR',
+  user, kind = 'plan', tier = 'paper', months = 1, strategyId = null, strategyName = null, locale = 'pt-BR',
 }) {
   const stripe = stripeClient();
   if (!stripe) {
@@ -407,7 +416,10 @@ async function createEmbeddedCheckout({
   }
   const priceId = kind === 'production' ? priceForProduction() : priceForPlan(tier, months);
   if (!priceId) {
-    const err = new Error('Price ID da Stripe não configurado');
+    const msg = kind === 'production'
+      ? 'Price Stripe de produção (STRIPE_PRICE_PRODUCTION_ID) não configurado'
+      : 'Price ID da Stripe não configurado';
+    const err = new Error(msg);
     err.code = 'stripe_off';
     throw err;
   }
@@ -421,13 +433,28 @@ async function createEmbeddedCheckout({
     ? `/${lng}/app/strategies/${strategyId}/producao`
     : `/${lng}/app/checkout?tier=${tier}&months=${months}`;
 
-  // Duração e mode derivados do Price Stripe (anti-burla do body months).
   const modeEnv = (process.env.STRIPE_CHECKOUT_MODE || '').trim().toLowerCase();
-  const resolved = await resolveAccessMonths(stripe, priceId, months);
-  const accessMonths = resolved.months;
-  let mode = modeEnv === 'payment' || modeEnv === 'subscription'
-    ? modeEnv
-    : (resolved.price?.type === 'recurring' ? 'subscription' : 'payment');
+  let mode;
+  let accessMonths = months;
+  let price = null;
+  if (kind === 'production') {
+    price = await stripe.prices.retrieve(priceId);
+    if (price.metadata?.spotstrat && price.metadata.spotstrat !== 'production') {
+      const err = new Error('STRIPE_PRICE_PRODUCTION_ID não aponta para o price de produção');
+      err.code = 'stripe_off';
+      throw err;
+    }
+    mode = modeEnv === 'payment' || modeEnv === 'subscription'
+      ? modeEnv
+      : (price.type === 'recurring' ? 'subscription' : 'payment');
+  } else {
+    const resolved = await resolveAccessMonths(stripe, priceId, months);
+    accessMonths = resolved.months;
+    price = resolved.price;
+    mode = modeEnv === 'payment' || modeEnv === 'subscription'
+      ? modeEnv
+      : (price?.type === 'recurring' ? 'subscription' : 'payment');
+  }
 
   const meta = {
     userId: user.id,
@@ -435,6 +462,7 @@ async function createEmbeddedCheckout({
     tier: String(tier || 'paper'),
     months: String(accessMonths),
     strategyId: strategyId || '',
+    strategyName: strategyName || '',
     locale: lng,
     priceId,
   };
@@ -471,7 +499,12 @@ async function createEmbeddedCheckout({
     userId: user.id,
     kind,
     priceId,
-    metadata: { tier, months: accessMonths, strategyId },
+    metadata: {
+      tier,
+      months: accessMonths,
+      strategyId: strategyId || '',
+      strategyName: strategyName || '',
+    },
   });
 
   return {
@@ -593,6 +626,7 @@ async function handleWebhook(rawBody, signature, desk) {
 module.exports = {
   stripeClient,
   stripeConfigured,
+  stripeProductionReady,
   publishableKey,
   createEmbeddedCheckout,
   retrieveAndFulfill,
