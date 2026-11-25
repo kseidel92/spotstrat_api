@@ -42,7 +42,7 @@ function mountAdmin(app) {
   });
 
   app.get('/v1/admin/overview', async (_req, res) => {
-    const [users, prompts, jobs, purchases, production, help, outbound, cancels] = await Promise.all([
+    const [users, prompts, jobs, purchases, production, help, outbound, cancels, contact] = await Promise.all([
       pool.query(`
         SELECT
           count(*)::int AS total,
@@ -97,6 +97,11 @@ function mountAdmin(app) {
                count(*) FILTER (WHERE status = 'pending')::int AS pending
         FROM cancellation_requests
       `),
+      pool.query(`
+        SELECT count(*)::int AS total,
+               count(*) FILTER (WHERE status = 'open')::int AS open
+        FROM contact_inquiries
+      `),
     ]);
     res.json({
       users: users.rows[0],
@@ -107,6 +112,7 @@ function mountAdmin(app) {
       help: help.rows[0],
       outbound7d: outbound.rows[0],
       cancellations: cancels.rows[0],
+      contact: contact.rows[0],
     });
   });
 
@@ -283,6 +289,26 @@ function mountAdmin(app) {
       params,
     );
     res.json({ reports: rows });
+  });
+
+  app.get('/v1/admin/contact', async (req, res) => {
+    const limit = clampInt(req.query.limit, 50, 1, 200);
+    const status = String(req.query.status || '').trim();
+    const params = [];
+    let filter = '';
+    if (status) {
+      params.push(status);
+      filter = `WHERE status = $1`;
+    }
+    params.push(limit);
+    const { rows } = await pool.query(
+      `SELECT id, name, contact, message, locale, page_path, user_id, status, created_at
+       FROM contact_inquiries ${filter}
+       ORDER BY created_at DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    res.json({ inquiries: rows });
   });
 
   app.get('/v1/admin/outbound', async (req, res) => {

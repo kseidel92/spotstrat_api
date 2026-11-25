@@ -16,6 +16,7 @@ const { suggestGuide } = require('./llm');
 const { missingTrigger, exitIsIndicatorOnly } = require('./feasibility');
 const { mountAdmin } = require('./admin');
 const stripeBilling = require('./stripeBilling');
+const { salesOpen, salesClosedPayload } = require('./launch');
 
 const hits = new Map();
 
@@ -542,6 +543,45 @@ function createHttp(desk) {
     res.json({ accounts: rows[0]?.accounts || 0 });
   });
 
+  app.post('/v1/contact', async (req, res) => {
+    const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'local')
+      .split(',')[0]
+      .trim();
+    if (!allow(`contact:${ip}`, 8, 60 * 60 * 1000)) {
+      return res.status(429).json({ error: 'rate_limited', message: 'Muitas mensagens. Tente de novo em breve.' });
+    }
+    const name = String(req.body?.name || '').trim().slice(0, 120);
+    const contact = String(req.body?.contact || '').trim().slice(0, 200);
+    const message = String(req.body?.message || '').trim().slice(0, 5000);
+    const locale = String(req.body?.locale || '').trim().slice(0, 16) || null;
+    const pagePath = String(req.body?.pagePath || '').trim().slice(0, 300) || null;
+    if (name.length < 2) {
+      return res.status(400).json({ error: 'invalid_name', message: 'Informe seu nome.' });
+    }
+    if (contact.length < 5) {
+      return res.status(400).json({ error: 'invalid_contact', message: 'Informe um e-mail ou telefone para retorno.' });
+    }
+    if (message.length < 8) {
+      return res.status(400).json({ error: 'invalid_message', message: 'Escreva a dúvida com um pouco mais de detalhe.' });
+    }
+    let userId = null;
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (token) {
+      try {
+        const payload = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+        if (payload?.sub) userId = payload.sub;
+      } catch (_) { /* visitante anônimo ok */ }
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO contact_inquiries (name, contact, message, locale, page_path, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, created_at, status`,
+      [name, contact, message, locale, pagePath, userId],
+    );
+    return res.status(201).json({ ok: true, inquiry: rows[0] });
+  });
+
   app.get('/v1/billing/plans', (_req, res) => {
     res.json(catalog());
   });
@@ -560,6 +600,9 @@ function createHttp(desk) {
   });
 
   async function simulateCheckout(req, res) {
+    if (!salesOpen()) {
+      return res.status(403).json(salesClosedPayload(req.profile?.locale || req.body?.locale));
+    }
     if (process.env.STRIPE_ALLOW_SIMULATE !== 'true') {
       return res.status(403).json({ error: 'simulate_off', message: 'Simulação desligada. Use o checkout Stripe.' });
     }
@@ -602,6 +645,9 @@ function createHttp(desk) {
   app.post('/v1/billing/simulate', auth, currentUser, simulateCheckout);
 
   app.post('/v1/billing/checkout', auth, currentUser, async (req, res) => {
+    if (!salesOpen()) {
+      return res.status(403).json(salesClosedPayload(req.profile?.locale || req.body?.locale));
+    }
     if (req.profile.desk === 'unverified') {
       return res.status(403).json({ error: 'unverified', message: 'Confirme a conta antes de pagar.' });
     }
@@ -780,6 +826,9 @@ function createHttp(desk) {
   });
 
   app.post('/v1/strategies/:id/production', auth, currentUser, requireDesk, async (req, res) => {
+    if (!salesOpen()) {
+      return res.status(403).json(salesClosedPayload(req.profile?.locale || req.body?.locale));
+    }
     const { rows: strategies } = await pool.query(
       'SELECT id, name, description, params FROM strategies WHERE id = $1 AND user_id = $2',
       [req.params.id, req.user.id],

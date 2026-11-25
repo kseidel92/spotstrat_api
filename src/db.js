@@ -362,6 +362,20 @@ CREATE TABLE IF NOT EXISTS strategy_help_reports (
 );
 CREATE INDEX IF NOT EXISTS strategy_help_user_idx ON strategy_help_reports (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS strategy_help_status_idx ON strategy_help_reports (status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS contact_inquiries (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  contact text NOT NULL,
+  message text NOT NULL,
+  locale text,
+  page_path text,
+  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  status text NOT NULL DEFAULT 'open',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS contact_inquiries_created_idx ON contact_inquiries (created_at DESC);
+CREATE INDEX IF NOT EXISTS contact_inquiries_status_idx ON contact_inquiries (status, created_at DESC);
 `;
 
 async function migrate() {
