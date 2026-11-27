@@ -1,20 +1,20 @@
-const MONTHLY = { paper: 93.33 };
-const PRODUCTION_BRL = 319.33;
+const MONTHLY = { paper: 97 };
+const PRODUCTION_BRL = 480;
 const FX = { BRL: 1, USD: 0.19723, EUR: 0.1756, MXN: 3.65, JPY: 31.175 };
 const LOCALE_CCY = { 'pt-BR': 'BRL', en: 'USD', es: 'EUR', 'es-MX': 'MXN', fr: 'EUR', de: 'EUR', ja: 'JPY' };
 const TERMS = [
   { months: 1, off: 0 },
   { months: 3, off: 0.1 },
   { months: 6, off: 0.18 },
-  { months: 12, off: 0.28 },
+  { months: 12, off: 2 / 12 },
 ];
 
 function quotePlan(tier, months) {
   const term = TERMS.find((item) => item.months === Number(months));
   const base = MONTHLY[tier];
   if (!term || !base) return null;
-  const monthly = Math.round(base * (1 - term.off) * 100) / 100;
-  const total = Math.round(monthly * term.months * 100) / 100;
+  const total = Math.round(base * term.months * (1 - term.off) * 100) / 100;
+  const monthly = Math.round((total / term.months) * 100) / 100;
   return {
     tier,
     months: term.months,
@@ -109,7 +109,7 @@ async function settleAccount(pool, row) {
   return { row: rows[0], changed: true };
 }
 
-function remainingRefund({ paidBrl, months, purchasedAt, accessEndsAt, now = Date.now() }) {
+function remainingRefund({ paidBrl, months, purchasedAt, accessEndsAt, now = Date.now(), listMonthly = MONTHLY.paper }) {
   const ends = accessEndsAt ? new Date(accessEndsAt).getTime() : 0;
   const daysLeft = ends > now ? Math.max(1, Math.ceil((ends - now) / 86400000)) : 0;
   const paid = Number(paidBrl);
@@ -119,7 +119,13 @@ function remainingRefund({ paidBrl, months, purchasedAt, accessEndsAt, now = Dat
   const span = Number.isFinite(start) && ends > start ? Math.max(1, Math.ceil((ends - start) / 86400000)) : termDays;
   const denom = Math.max(1, Math.min(span, termDays));
   const covered = Math.min(daysLeft, denom);
-  const refundBrl = Math.round(Math.min(paid, (paid * covered) / denom) * 100) / 100;
+  const elapsed = Number.isFinite(start)
+    ? Math.max(0, Math.ceil((Math.min(now, ends) - start) / 86400000))
+    : Math.max(0, denom - covered);
+  const daysUsed = Math.min(elapsed, denom);
+  const list = Number(listMonthly) > 0 ? Number(listMonthly) : MONTHLY.paper;
+  const consumed = (list / 30) * daysUsed;
+  const refundBrl = Math.round(Math.min(paid, Math.max(0, paid - consumed)) * 100) / 100;
   return { daysLeft, refundBrl };
 }
 
