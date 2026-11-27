@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('./db');
 const { PRESETS, publicPreset, localizedExplanation } = require('./presets');
 const {
-  id, sha256, emptySnap, walletOf, parseLocaleNumber, publicUser, deskAllowed, LOCALES, alarmSoundKind,
+  id, sha256, emptySnap, walletOf, parseLocaleNumber, publicUser, deskAllowed, LOCALES, alarmSoundKind, TRIAL_HOURS,
 } = require('./shared');
 const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
@@ -381,9 +381,9 @@ function createHttp(desk) {
       try {
         await client.query('BEGIN');
         const inserted = await client.query(
-          `INSERT INTO users (email, google_sub, name, locale, email_verified_at)
-           VALUES ($1,$2,$3,$4, now()) RETURNING *`,
-          [email, googleSub, name || null, 'pt-BR'],
+          `INSERT INTO users (email, google_sub, name, locale, email_verified_at, trial_started_at, trial_ends_at, plan_status)
+           VALUES ($1,$2,$3,$4, now(), now(), now() + ($5 || ' hours')::interval, 'trialing') RETURNING *`,
+          [email, googleSub, name || null, 'pt-BR', String(TRIAL_HOURS)],
         );
         await seedPresets(client, inserted.rows[0].id);
         await client.query('COMMIT');
@@ -443,7 +443,24 @@ function createHttp(desk) {
     const code = String(req.body.code || '').trim();
     const ok = await consumeCode(req.user.id, 'email', code);
     if (!ok) return res.status(400).json({ error: 'bad_code', message: 'Código de e-mail inválido ou vencido.' });
-    await pool.query('UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1', [req.user.id]);
+    await pool.query(
+      `UPDATE users SET
+         email_verified_at = COALESCE(email_verified_at, now()),
+         trial_started_at = CASE
+           WHEN trial_ends_at IS NULL AND plan_status = 'none' THEN COALESCE(trial_started_at, now())
+           ELSE trial_started_at
+         END,
+         trial_ends_at = CASE
+           WHEN trial_ends_at IS NULL AND plan_status = 'none' THEN now() + ($2 || ' hours')::interval
+           ELSE trial_ends_at
+         END,
+         plan_status = CASE
+           WHEN trial_ends_at IS NULL AND plan_status = 'none' THEN 'trialing'
+           ELSE plan_status
+         END
+       WHERE id = $1`,
+      [req.user.id, String(TRIAL_HOURS)],
+    );
     const fresh = await loadUser(req.user.id);
     if (fresh.email_verified_at) await maybeStripeCustomer(fresh);
     const user = await loadUser(req.user.id);

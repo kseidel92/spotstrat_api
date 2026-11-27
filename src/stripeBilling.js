@@ -468,6 +468,21 @@ async function createEmbeddedCheckout({
   };
 
   // Checkout Studio (hosted_page). SDK stripe@^23 → ui_mode hosted_page.
+  try {
+    const productRef = price?.product;
+    const productId = typeof productRef === 'string' ? productRef : productRef?.id;
+    if (productId && stripe) {
+      const product = productRef && typeof productRef === 'object' && productRef.name
+        ? productRef
+        : await stripe.products.retrieve(productId);
+      const current = String(product?.name || '');
+      if (/paper|tradeai/i.test(current)) {
+        const next = kind === 'production' ? 'SpotStrat — Operar na sua máquina' : 'SpotStrat — Simulador';
+        if (current !== next) await stripe.products.update(productId, { name: next });
+      }
+    }
+  } catch { /* o checkout segue mesmo se o nome do produto não puder mudar */ }
+
   const sessionParams = {
     mode,
     ui_mode: 'hosted_page',
