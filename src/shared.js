@@ -192,6 +192,8 @@ function publicUser(row) {
     marePrefs: row.mare_prefs,
     hasGoogle: google,
     hasPassword: !!row.password_hash,
+    promptsUsed: Number(row.prompt_count || 0),
+    promptLimit: desk === 'trial' ? TRIAL_PROMPT_LIMIT : null,
   };
 }
 

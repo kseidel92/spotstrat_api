@@ -152,6 +152,11 @@ const contradictionOptions = cleanOptions({
   wallet: 1000,
   autoFill: true,
 }, contradiction, 'pt-BR');
+const guidedLocks = cleanOptions({ guided: true, stopPct: 1.2, tpPct: 1.8, wallet: 1000 }, '', 'pt-BR');
+assert.strictEqual(guidedLocks.exit, 'manual');
+assert.strictEqual(guidedLocks.stopPct, 1.2);
+assert.strictEqual(guidedLocks.tpPct, 1.8);
+
 assert.strictEqual(contradictionOptions.exit, 'indicator');
 assert.strictEqual(contradictionOptions.stopPct, null);
 assert.strictEqual(contradictionOptions.tpPct, null);

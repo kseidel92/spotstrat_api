@@ -538,11 +538,21 @@ function questionsOf(data) {
   return list.slice(0, 6);
 }
 
+function clipText(value, max) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= max) return text;
+  const cut = text.slice(0, Math.max(1, max - 1));
+  const atWord = cut.lastIndexOf(' ');
+  const head = atWord >= Math.floor(max * 0.5) ? cut.slice(0, atWord) : cut;
+  return `${head.replace(/[.,;:(]+$/, '')}…`;
+}
+
 function defaultsOf(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => ({
-    label: String(item?.label || item?.name || '').slice(0, 80),
-    value: String(item?.value ?? '').slice(0, 40),
+    label: clipText(item?.label || item?.name || '', 80),
+    value: clipText(item?.value ?? '', 160),
   })).filter((item) => item.label && item.value).slice(0, 8);
 }
 
@@ -760,7 +770,8 @@ function persistAggressionAsk(code, userText) {
 /** Remove stop/target no objeto buy quando a pessoa pediu saída só por indicador. */
 /** Garante literais de stop/alvo no buy quando o wizard já escolheu %. */
 function patchManualExitLiterals(code, options) {
-  if (!options || options.exit !== 'manual') return String(code || '');
+  const lockExit = options && (options.exit === 'manual' || (options.guided && options.exit !== 'history' && options.exit !== 'indicator'));
+  if (!lockExit) return String(code || '');
   const stop = Number(options.stopPct);
   const target = Number(options.tpPct);
   if (!(stop > 0 && target > 0)) return String(code || '');
@@ -802,8 +813,8 @@ function chosenExitAsk(code, options, userText = '') {
   if (options.exit === 'indicator' || exitIsIndicatorOnly(userText)) return '';
   const stop = Number(options.stopPct);
   const target = Number(options.tpPct);
-  // Always enforce explicit manual exits (including guided wizards).
-  if (options.exit === 'manual' && stop > 0 && target > 0 && (!codeHasNumber(code, stop) || !codeHasNumber(code, target))) {
+  const lockExit = options.exit === 'manual' || (options.guided && options.exit !== 'history' && options.exit !== 'indicator');
+  if (lockExit && stop > 0 && target > 0 && (!codeHasNumber(code, stop) || !codeHasNumber(code, target))) {
     return `O brief já define stop ${stop}% e alvo ${target}%. No buy: stop: price * (1 - ${stop}/100), target: price * (1 + ${target}/100). Declare no thesis. Escreva o código. Não pergunte.`;
   }
   if (options.guided) return '';

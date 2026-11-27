@@ -8,6 +8,7 @@ const { pool } = require('./db');
 const { PRESETS, publicPreset, localizedExplanation } = require('./presets');
 const {
   id, sha256, emptySnap, walletOf, parseLocaleNumber, publicUser, deskAllowed, LOCALES, alarmSoundKind, TRIAL_HOURS,
+  TRIAL_PROMPT_LIMIT,
 } = require('./shared');
 const lab = require('./lab');
 const { quotePlan, catalog, productionQuote, settleAccount, remainingRefund } = require('./plans');
@@ -278,7 +279,7 @@ function createHttp(desk) {
       return res.status(201).json({
         user: publicUser(user),
         verification: {
-          emailCode: mail.sent ? undefined : expose(emailCode),
+          emailCode: expose(emailCode),
           sent: !!mail.sent,
           ...(phoneCode ? { phoneCode: expose(phoneCode) } : {}),
           expiresInSec: 600,
@@ -513,7 +514,7 @@ function createHttp(desk) {
       ok: true,
       channel,
       sent: mail.sent,
-      code: mail.sent ? undefined : expose(code),
+      code: expose(code),
     });
   });
 
@@ -1122,7 +1123,7 @@ function createHttp(desk) {
   app.get('/v1/jobs/:id', auth, currentUser, async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!rows[0]) return res.status(404).json({ error: 'not_found' });
-    res.json({ job: rows[0] });
+    res.json({ job: presentJob(rows[0]) });
   });
 
   app.get('/v1/desk/state', auth, currentUser, requireDesk, async (req, res) => {
@@ -1228,6 +1229,16 @@ async function consumeCode(userId, channel, code) {
   return true;
 }
 
+function presentJob(row) {
+  const output = row.output && typeof row.output === 'object' ? row.output : {};
+  const name = output.name || null;
+  return {
+    ...row,
+    strategyName: name,
+    strategyId: row.strategy_id || null,
+  };
+}
+
 function cleanChannels(raw) {
   const src = raw.channels && typeof raw.channels === 'object' ? raw.channels : raw;
   const volume = Number(src.volume);
@@ -1267,10 +1278,14 @@ function cleanOptions(raw, prompt = '', locale = 'pt-BR') {
   }
   const fromText = extractPromptOptions(prompt);
   const guided = !!raw.guided;
-  let exit = raw.exit === 'manual' ? 'manual' : 'history';
   const asNum = (value) => (value == null || value === '' ? null : parseLocaleNumber(value, locale));
   let stopPct = asNum(raw.stopPct);
   let tpPct = asNum(raw.tpPct);
+  // Guided wizards keep the chosen % unless the client explicitly opts into history.
+  let exit;
+  if (raw.exit === 'indicator') exit = 'indicator';
+  else if (guided) exit = raw.exit === 'history' ? 'history' : 'manual';
+  else exit = raw.exit === 'manual' ? 'manual' : 'history';
   let mareMode = ['any', 'good', 'not_bad'].includes(raw.mareMode) ? raw.mareMode : 'any';
   // Free-text wins over defaults when the wizard did not lock values (unguided prompt).
   if (!guided) {
@@ -1374,6 +1389,17 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
     });
     return { status: 429, error: { error: 'rate_limited', message: 'Muitos prompts em pouco tempo. Tenta de novo mais tarde.' } };
   }
+  if (!strategyId && mode !== 'alarm' && req.profile.desk === 'trial') {
+    const used = Number(req.user.prompt_count || 0);
+    if (used >= TRIAL_PROMPT_LIMIT) {
+      const limitMsg = `O trial inclui ${TRIAL_PROMPT_LIMIT} criações. Escolha um plano para continuar.`;
+      await savePrompt(req, {
+        prompt, mode, status: 'rejected', detail: limitMsg, threadId, strategyId,
+        httpStatus: 402, errorStage: 'http',
+      });
+      return { status: 402, error: { error: 'trial_expired', message: limitMsg } };
+    }
+  }
   if (mode === 'alarm') {
     const channels = cleanChannels(req.body.options?.channels || {});
     if (!channels.sound && !channels.email) {
@@ -1442,6 +1468,9 @@ async function enqueuePrompt(req, { prompt, threadId, strategyId }) {
     strategyId,
     httpStatus: 202,
   });
+  if (!strategyId && mode !== 'alarm') {
+    await pool.query('UPDATE users SET prompt_count = prompt_count + 1 WHERE id = $1', [req.user.id]);
+  }
   return { jobId: job.rows[0].id, status: job.rows[0].status, threadId: thread };
 }
 

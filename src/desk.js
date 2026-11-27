@@ -773,10 +773,44 @@ function createDesk(hub) {
     };
   }
 
+  function equitySeriesOf(run, trades, liveEquity) {
+    const initial = Number(run.snap.initial) || INITIAL;
+    const points = [Number(initial.toFixed(2))];
+    let eq = initial;
+    for (const row of trades) {
+      eq += Number(row.pnl_usdt) || 0;
+      points.push(Number(eq.toFixed(2)));
+    }
+    const live = Number(liveEquity);
+    if (Number.isFinite(live) && (points.length === 1 || Math.abs(points[points.length - 1] - live) > 0.009)) {
+      points.push(Number(live.toFixed(2)));
+    }
+    return points;
+  }
+
   async function stateFor(userId) {
     const list = [];
+    const owned = [];
     for (const run of runners.values()) {
-      if (run.userId !== userId) continue;
+      if (run.userId === userId) owned.push(run);
+    }
+    const ids = owned.map((run) => run.strategy.id);
+    const seriesRows = ids.length
+      ? (await pool.query(
+        `SELECT strategy_id, pnl_usdt
+         FROM trades
+         WHERE strategy_id = ANY($1) AND closed_at IS NOT NULL
+         ORDER BY closed_at ASC`,
+        [ids],
+      )).rows
+      : [];
+    const tradesBy = new Map();
+    for (const row of seriesRows) {
+      const bag = tradesBy.get(row.strategy_id) || [];
+      bag.push(row);
+      tradesBy.set(row.strategy_id, bag);
+    }
+    for (const run of owned) {
       const px = run.snap.position ? hub.getSymbol(run.snap.position.symbol)?.price : null;
       rollHalt(run.snap, px);
       const { rows } = await pool.query(
@@ -787,6 +821,7 @@ function createDesk(hub) {
         [run.strategy.id],
       );
       const kpi = rows[0];
+      const liveEquity = Number(equityOf(run.snap, px).toFixed(2));
       list.push({
         id: run.strategy.id,
         name: run.strategy.name,
@@ -796,9 +831,9 @@ function createDesk(hub) {
         mareMode: run.strategy.mare_mode,
         paused: run.strategy.paused,
         description: run.strategy.description,
-        equity: Number(equityOf(run.snap, px).toFixed(2)),
+        equity: liveEquity,
         cash: Number(run.snap.cash.toFixed(2)),
-        pnl: Number((equityOf(run.snap, px) - (Number(run.snap.initial) || INITIAL)).toFixed(2)),
+        pnl: Number((liveEquity - (Number(run.snap.initial) || INITIAL)).toFixed(2)),
         closedPnl: Number(kpi.pnl.toFixed(2)),
         nTrades: kpi.n,
         winRate: kpi.n ? kpi.wins / kpi.n : 0,
@@ -806,6 +841,7 @@ function createDesk(hub) {
         position: publicPosition(run.snap),
         startedAt: run.snap.startedAt,
         createdAt: run.strategy.created_at,
+        equitySeries: equitySeriesOf(run, tradesBy.get(run.strategy.id) || [], liveEquity),
       });
     }
     const user = users.get(userId);

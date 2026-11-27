@@ -256,7 +256,7 @@ function optionNote(options, userText = '') {
       + 'O código usa exatamente esses %. No thesis/exit/risks diga que vieram da busca nas velas. '
       + 'Nunca escreva "como você escolheu", "como você escreveu", "como pediu", "seus números" nem "sem trocar seus números".',
     );
-  } else if (options.exit === 'manual' && stop > 0 && target > 0) {
+  } else if ((options.exit === 'manual' || (options.guided && options.exit !== 'history')) && stop > 0 && target > 0) {
     // Guided wizards / explicit % in the prompt — honor them.
     lines.push(`A pessoa já escolheu o stop de ${stop}% e o alvo de ${target}% a partir da entrada. O código usa esses percentuais. Não troque por outro.`);
   } else if (!options.guided && options.exit === 'history' && !options.historyApplied) {

@@ -9,6 +9,7 @@ import {
   buildJsRecipe,
 } from '../src/sandbox.js';
 import { suggestGuide } from '../src/llm.js';
+import { cleanOptions } from '../src/http.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -117,6 +118,18 @@ const guidedAsk = buildJsRecipe(
 );
 assert(guidedAsk.recipe && !guidedAsk.ask, JSON.stringify(guidedAsk));
 assert(/0\.9/.test(guidedAsk.recipe.code) && /1\.6/.test(guidedAsk.recipe.code), 'guided+manual grava stop/alvo escolhidos');
+
+const guidedDefault = cleanOptions({ guided: true, stopPct: 1.2, tpPct: 1.8, wallet: 1000 }, '', 'pt-BR');
+assert(guidedDefault.exit === 'manual' && guidedDefault.stopPct === 1.2 && guidedDefault.tpPct === 1.8, 'guided sem exit trava stop/alvo manuais');
+const guidedHistory = cleanOptions({ guided: true, exit: 'history', stopPct: 1.2, tpPct: 1.8, wallet: 1000 }, '', 'pt-BR');
+assert(guidedHistory.exit === 'history', 'guided só usa histórico com opt-in explícito');
+const guidedMissingPct = buildJsRecipe(
+  { code: codeMissingExit, ask: '', questions: [], defaults: [], name: 'Guia', thesis: 'Compra no rompimento.', entryText: 'e', exitText: 'x', risks: '' },
+  briefGuide,
+  'pt-BR',
+  { guided: true, stopPct: 0.9, tpPct: 1.6 },
+);
+assert(guidedMissingPct.recipe && /0\.9/.test(guidedMissingPct.recipe.code) && /1\.6/.test(guidedMissingPct.recipe.code), 'guided com % e sem exit=manual ainda grava os números');
 
 const gRegion = regionAsk('function strategy(ctx){ const c=ctx.candles("15m"); return {action:"hold"}; }', brief05);
 assert(gRegion, '05 exige região por testes nas 48 velas');

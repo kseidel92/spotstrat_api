@@ -376,7 +376,7 @@ async function fulfillProduction(session, desk) {
     try {
       const { notifyOwner } = require('./mail');
       await notifyOwner(
-        `TradeAI produção · ${user.email} · ${strategies[0].name}`,
+        `SpotStrat produção · ${user.email} · ${strategies[0].name}`,
         [
           `Usuário: ${user.name || ''} <${user.email}>`,
           `Id: ${user.id}`,

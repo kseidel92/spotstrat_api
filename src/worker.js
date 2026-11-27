@@ -47,7 +47,16 @@ async function finish(job, patch) {
   await settlePrompt(job, patch);
   bus.emit('push', {
     userId: job.user_id,
-    msg: { type: 'job', job: { id: job.id, status: patch.status, error: patch.error || null, strategyId: patch.strategyId || job.strategy_id } },
+    msg: {
+      type: 'job',
+      job: {
+        id: job.id,
+        status: patch.status,
+        error: patch.error || null,
+        strategyId: patch.strategyId || job.strategy_id,
+        strategyName: patch.strategyName || patch.output?.name || null,
+      },
+    },
   });
 }
 
@@ -284,7 +293,7 @@ async function applyHistoryFit(job, result, messages) {
   // Guided + manual exits already carry stop/tp — skip history fit.
   // Guided + history still runs fit so "measure on candles" stays honest.
   if (options.historyApplied) return result;
-  if (options.guided && options.exit === 'manual') return result;
+  if (options.guided && options.exit !== 'history') return result;
   const userText = (messages || []).filter((m) => m.role === 'user').map((m) => m.content).join('\n');
   if (exitIsIndicatorOnly(userText)) return result;
   const fitStop = options.exit === 'history';
@@ -504,6 +513,7 @@ async function runJob(job) {
     return;
   }
   const recipe = shaped.recipe;
+  if (recipe) recipe.name = String(recipe.name || '').trim() || 'Estratégia';
   syncExitFromCode(recipe);
   const asked = messages.map((m) => m.content).join('\n');
   const blockedGrid = gridFailure(asked, recipe && recipe.code, input.locale || 'pt-BR');
