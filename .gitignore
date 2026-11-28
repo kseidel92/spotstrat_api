@@ -2,6 +2,8 @@ node_modules/
 data/
 run/
 .env
+.gcp-sa.json
+gcp-sa.json
 *.log
 .DS_Store
 bin/cloudflared

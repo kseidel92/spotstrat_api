@@ -1,0 +1,8 @@
+node_modules
+.env
+.gcp-sa.json
+run
+data
+cloudflare
+*.log
+.git
